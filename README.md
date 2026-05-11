@@ -39,7 +39,7 @@ Input(4) → Linear(100) → ReLU → Dropout(0.2)
 - Optimizer: Adam
 - Loss Function: CrossEntropyLoss
 - Batch Size: 5000
-- Max Epochs: 1000
+- Max Epochs: 200
 - Early Stopping: 50 epochs
 
 ## 모델 성능
