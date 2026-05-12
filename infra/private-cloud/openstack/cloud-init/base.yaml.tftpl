@@ -1,0 +1,22 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+
+packages:
+  - ca-certificates
+  - curl
+  - jq
+  - gnupg
+  - lsb-release
+  - qemu-guest-agent
+
+write_files:
+  - path: /etc/hybrid-ai-node-role
+    permissions: "0644"
+    content: |
+      ${node_role}
+
+runcmd:
+  - systemctl enable --now qemu-guest-agent || true
+  - mkdir -p /opt/hybrid-ai
+  - echo "node_role=${node_role}" > /opt/hybrid-ai/foundation.env
