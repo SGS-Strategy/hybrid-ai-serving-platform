@@ -1,0 +1,107 @@
+variable "project_name" {
+  description = "Name prefix for private cloud foundation resources."
+  type        = string
+  default     = "hybrid-ai-private"
+}
+
+variable "region" {
+  description = "OpenStack region. Leave null to use the provider environment."
+  type        = string
+  default     = null
+}
+
+variable "availability_zone" {
+  description = "Optional availability zone for compute instances."
+  type        = string
+  default     = null
+}
+
+variable "external_network_id" {
+  description = "External network ID for router gateway. Empty string disables router creation."
+  type        = string
+  default     = ""
+}
+
+variable "private_network_cidr" {
+  description = "CIDR block for the private foundation network."
+  type        = string
+  default     = "10.42.0.0/24"
+}
+
+variable "dns_nameservers" {
+  description = "DNS servers assigned to the private subnet."
+  type        = list(string)
+  default     = ["1.1.1.1", "8.8.8.8"]
+}
+
+variable "ssh_allowed_cidrs" {
+  description = "CIDR ranges allowed to reach instances over SSH."
+  type        = list(string)
+  default     = []
+}
+
+variable "key_pair_name" {
+  description = "OpenStack key pair name for provisioned instances."
+  type        = string
+  default     = "hybrid-ai-private-admin"
+}
+
+variable "ssh_public_key" {
+  description = "Public SSH key material for the OpenStack key pair."
+  type        = string
+  sensitive   = true
+}
+
+variable "control_plane_count" {
+  description = "Number of Kubernetes control-plane candidate VMs."
+  type        = number
+  default     = 1
+}
+
+variable "build_worker_count" {
+  description = "Number of model build worker VMs."
+  type        = number
+  default     = 1
+}
+
+variable "gpu_worker_count" {
+  description = "Number of GPU worker VMs. Keep zero until GPU quota is confirmed."
+  type        = number
+  default     = 0
+}
+
+variable "control_plane_image_name" {
+  description = "OpenStack image name for control-plane VMs."
+  type        = string
+}
+
+variable "control_plane_flavor_name" {
+  description = "OpenStack flavor name for control-plane VMs."
+  type        = string
+}
+
+variable "build_worker_image_name" {
+  description = "OpenStack image name for build-worker VMs."
+  type        = string
+}
+
+variable "build_worker_flavor_name" {
+  description = "OpenStack flavor name for build-worker VMs."
+  type        = string
+}
+
+variable "gpu_worker_image_name" {
+  description = "OpenStack image name for GPU-worker VMs."
+  type        = string
+}
+
+variable "gpu_worker_flavor_name" {
+  description = "OpenStack GPU flavor name for GPU-worker VMs."
+  type        = string
+}
+
+variable "instance_metadata" {
+  description = "Extra metadata added to every provisioned VM."
+  type        = map(string)
+  default     = {}
+}
