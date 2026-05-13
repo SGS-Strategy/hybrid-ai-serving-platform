@@ -1,0 +1,179 @@
+name: Private Cloud Foundation
+
+on:
+  workflow_dispatch:
+    inputs:
+      terraform_action:
+        description: Terraform action to run against the OpenStack foundation.
+        required: true
+        type: choice
+        default: plan
+        options:
+          - plan
+          - apply
+          - destroy
+      apply_kubernetes:
+        description: Apply namespace, quota, RBAC, and network-policy baseline.
+        required: true
+        type: boolean
+        default: false
+      apply_storage:
+        description: Apply storage baseline after replacing example values.
+        required: true
+        type: boolean
+        default: false
+      apply_gpu:
+        description: Apply GPU runtime and validation baseline.
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-cloud-foundation
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  terraform:
+    name: Terraform OpenStack
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/private-cloud/openstack
+    env:
+      OS_AUTH_URL: ${{ secrets.OPENSTACK_AUTH_URL }}
+      OS_USERNAME: ${{ secrets.OPENSTACK_USERNAME }}
+      OS_PASSWORD: ${{ secrets.OPENSTACK_PASSWORD }}
+      OS_PROJECT_NAME: ${{ secrets.OPENSTACK_PROJECT_NAME }}
+      OS_USER_DOMAIN_NAME: ${{ secrets.OPENSTACK_USER_DOMAIN_NAME }}
+      OS_PROJECT_DOMAIN_NAME: ${{ secrets.OPENSTACK_PROJECT_DOMAIN_NAME }}
+      OS_REGION_NAME: ${{ vars.OPENSTACK_REGION }}
+      OS_IDENTITY_API_VERSION: "3"
+      TF_BACKEND_CONFIG: ${{ secrets.TF_BACKEND_CONFIG }}
+      PRIVATE_CLOUD_TFVARS: ${{ secrets.PRIVATE_CLOUD_TFVARS }}
+      TF_VAR_ssh_public_key: ${{ secrets.PRIVATE_CLOUD_SSH_PUBLIC_KEY }}
+      TF_VAR_control_plane_image_name: ${{ vars.CONTROL_PLANE_IMAGE_NAME }}
+      TF_VAR_control_plane_flavor_name: ${{ vars.CONTROL_PLANE_FLAVOR_NAME }}
+      TF_VAR_build_worker_image_name: ${{ vars.BUILD_WORKER_IMAGE_NAME }}
+      TF_VAR_build_worker_flavor_name: ${{ vars.BUILD_WORKER_FLAVOR_NAME }}
+      TF_VAR_gpu_worker_image_name: ${{ vars.GPU_WORKER_IMAGE_NAME }}
+      TF_VAR_gpu_worker_flavor_name: ${{ vars.GPU_WORKER_FLAVOR_NAME }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Verify required inputs
+        run: |
+          required=(
+            OS_AUTH_URL
+            OS_USERNAME
+            OS_PASSWORD
+            OS_PROJECT_NAME
+            OS_USER_DOMAIN_NAME
+            OS_PROJECT_DOMAIN_NAME
+            TF_VAR_ssh_public_key
+            TF_VAR_control_plane_image_name
+            TF_VAR_control_plane_flavor_name
+            TF_VAR_build_worker_image_name
+            TF_VAR_build_worker_flavor_name
+            TF_VAR_gpu_worker_image_name
+            TF_VAR_gpu_worker_flavor_name
+          )
+
+          missing=0
+          for name in "${required[@]}"; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing required GitHub secret or variable: ${name}"
+              missing=1
+            fi
+          done
+
+          if [[ "${{ inputs.terraform_action }}" != "plan" && -z "${TF_BACKEND_CONFIG}" ]]; then
+            echo "::error::TF_BACKEND_CONFIG secret is required for apply or destroy."
+            missing=1
+          fi
+
+          exit "${missing}"
+
+      - name: Terraform init
+        run: |
+          if [[ -n "${TF_BACKEND_CONFIG}" ]]; then
+            printf "terraform {\n  backend \"s3\" {}\n}\n" > backend.generated.tf
+            printf "%s" "${TF_BACKEND_CONFIG}" > backend.hcl
+            terraform init -backend-config=backend.hcl
+          else
+            terraform init
+          fi
+
+      - name: Write optional tfvars
+        run: |
+          if [[ -n "${PRIVATE_CLOUD_TFVARS}" ]]; then
+            printf "%s" "${PRIVATE_CLOUD_TFVARS}" > github.auto.tfvars
+          fi
+
+      - name: Terraform format check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan
+        run: |
+          if [[ "${{ inputs.terraform_action }}" == "destroy" ]]; then
+            terraform plan -destroy -out=private-cloud.tfplan
+          else
+            terraform plan -out=private-cloud.tfplan
+          fi
+
+      - name: Terraform apply selected action
+        if: ${{ inputs.terraform_action == 'apply' || inputs.terraform_action == 'destroy' }}
+        run: terraform apply -auto-approve private-cloud.tfplan
+
+  kubernetes:
+    name: Kubernetes Baseline
+    runs-on: ubuntu-latest
+    needs: terraform
+    if: ${{ inputs.apply_kubernetes || inputs.apply_storage || inputs.apply_gpu }}
+    env:
+      KUBECONFIG_B64: ${{ secrets.PRIVATE_KUBECONFIG_B64 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubeconfig
+        run: |
+          if [[ -z "${KUBECONFIG_B64}" ]]; then
+            echo "::error::PRIVATE_KUBECONFIG_B64 secret is required to apply Kubernetes manifests."
+            exit 1
+          fi
+
+          kubeconfig="${RUNNER_TEMP}/private-kubeconfig"
+          printf "%s" "${KUBECONFIG_B64}" | base64 -d > "${kubeconfig}"
+          chmod 600 "${kubeconfig}"
+          echo "KUBECONFIG=${kubeconfig}" >> "${GITHUB_ENV}"
+
+      - name: Apply Kubernetes foundation
+        if: ${{ inputs.apply_kubernetes || inputs.apply_storage || inputs.apply_gpu }}
+        run: kubectl apply -k infra/private-cloud/kubernetes
+
+      - name: Apply storage foundation
+        if: ${{ inputs.apply_storage }}
+        run: kubectl apply -k infra/private-cloud/storage
+
+      - name: Apply GPU foundation
+        if: ${{ inputs.apply_gpu }}
+        run: kubectl apply -k infra/private-cloud/gpu-worker
