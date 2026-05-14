@@ -68,7 +68,7 @@ Usage:
   ./ha install [--bin-dir DIR] [--force] [--no-shell-config] [--with-deps]
   ha doctor
   ha test [--strict] [--terraform-init] [--integration]
-  ha up local|lxd|openstack|kubernetes|storage|gpu|all [--auto-approve]
+  ha up local|lxd|openstack-local|openstack|kubernetes|storage|gpu|all [--auto-approve]
   ha prod check
   ha env init|check|path|example|secret-example
   ha explain
@@ -109,6 +109,7 @@ Examples:
   ha completion zsh
   ha up all --auto-approve
   ha prod check
+  ha up openstack-local --auto-approve
   ha up openstack --auto-approve
   ha tf fmt -check -recursive
   ha tf init
@@ -151,6 +152,7 @@ ha는 이 repository 전용 helper입니다.
 
   ha up local --auto-approve
   ha up all --auto-approve
+  ha up openstack-local --auto-approve
   ha up openstack --auto-approve
   ha up kubernetes
   ha up storage
@@ -159,6 +161,7 @@ ha는 이 repository 전용 helper입니다.
   - 기본 provider는 auto입니다.
   - ha up local은 현재 서버에 k3s Kubernetes를 설치하고 kubeconfig를 .ha/kubeconfig로 받습니다.
   - ha up lxd는 sudo 없이 LXD 컨테이너 안에 k3s Kubernetes를 설치합니다.
+  - ha up openstack-local은 LXD 컨테이너 안에 DevStack 기반 로컬 OpenStack control plane을 설치합니다.
   - ha up all은 provider가 local/LXD이면 k3s provisioning 후 Kubernetes baseline manifest를 적용합니다.
   - ha up openstack은 HA_PROVIDER=openstack일 때 Terraform apply로 OpenStack 리소스를 생성/변경합니다.
   - ha up kubernetes|storage|gpu는 현재 kubeconfig 대상 cluster에 manifest를 적용합니다.
@@ -182,6 +185,7 @@ ha는 이 repository 전용 helper입니다.
     OS_PASSWORD
 
   OpenStack mode에서 SSH public key는 없으면 .ha/ssh 아래에 자동 생성해서 Terraform에 전달합니다.
+  로컬 OpenStack control plane은 HA_OPENSTACK_CONTAINER, HA_DEVSTACK_BRANCH, HA_DEVSTACK_PASSWORD로 조정합니다.
 
 5. 자주 쓰는 순서
 
@@ -322,7 +326,7 @@ _ha_completion() {
       if [[ "$cur" == --* ]]; then
         COMPREPLY=($(compgen -W "--auto-approve" -- "$cur"))
       elif [[ "$COMP_CWORD" -eq 2 ]]; then
-        COMPREPLY=($(compgen -W "local lxd server openstack terraform kubernetes foundation base storage gpu gpu-worker k8s all" -- "$cur"))
+        COMPREPLY=($(compgen -W "local lxd server openstack-local devstack openstack terraform kubernetes foundation base storage gpu gpu-worker k8s all" -- "$cur"))
       else
         COMPREPLY=($(compgen -W "--auto-approve" -- "$cur"))
       fi
@@ -403,7 +407,7 @@ _ha() {
     '--terraform-init:download providers and run terraform validate'
     '--integration:run terraform plan and Kubernetes server dry-run'
   )
-  up_targets=(local lxd server openstack terraform kubernetes foundation base storage gpu gpu-worker k8s all)
+  up_targets=(local lxd server openstack-local devstack openstack terraform kubernetes foundation base storage gpu gpu-worker k8s all)
   up_opts=('--auto-approve:apply OpenStack Terraform without prompting')
   prod_actions=(check)
   k8s_actions=(render diff apply)
@@ -1220,10 +1224,15 @@ export HA_CLUSTER_NAME="${HA_CLUSTER_NAME:-hybrid-ai-private}"
 export HA_K8S_DISTRO="${HA_K8S_DISTRO:-k3s}"
 export HA_LOCAL_KUBECONFIG="${HA_LOCAL_KUBECONFIG:-.ha/kubeconfig}"
 export HA_LXD_CONTAINER="${HA_LXD_CONTAINER:-ha-k3s}"
+export HA_OPENSTACK_CONTAINER="${HA_OPENSTACK_CONTAINER:-ha-openstack}"
 
 # k3s install settings for local/LXD provisioning.
 export HA_K3S_CHANNEL="${HA_K3S_CHANNEL:-stable}"
 export HA_K3S_EXEC="${HA_K3S_EXEC:-server --write-kubeconfig-mode 644 --disable traefik}"
+
+# Local OpenStack control plane settings for ha up openstack-local.
+export HA_DEVSTACK_BRANCH="${HA_DEVSTACK_BRANCH:-master}"
+export HA_DEVSTACK_PASSWORD="${HA_DEVSTACK_PASSWORD:-hybrid-ai-devstack}"
 
 # Baseline Kubernetes manifests are applied by default after provisioning.
 # Storage and GPU examples need real NFS/GPU backing, so keep them opt-in.
@@ -2048,6 +2057,177 @@ run_lxd_provision() {
   write_lxd_handoff "$name"
 }
 
+openstack_lxd_container_name() {
+  printf '%s\n' "${HA_OPENSTACK_CONTAINER:-ha-openstack}"
+}
+
+ensure_openstack_lxd_container() {
+  local name="$1"
+  local raw_lxc
+
+  raw_lxc=$'lxc.apparmor.profile=unconfined\nlxc.cap.drop=\nlxc.mount.auto=proc:rw sys:rw cgroup:rw'
+
+  ensure_lxd_initialized
+
+  if ! lxc info "$name" >/dev/null 2>&1; then
+    lxc init "${HA_OPENSTACK_LXD_IMAGE:-ubuntu:24.04}" "$name" \
+      -c security.nesting=true \
+      -c security.privileged=true \
+      -c raw.lxc="$raw_lxc"
+    lxc config device add "$name" kmsg unix-char source=/dev/kmsg path=/dev/kmsg >/dev/null 2>&1 || true
+    if [[ -e /dev/kvm ]]; then
+      lxc config device add "$name" kvm unix-char source=/dev/kvm path=/dev/kvm >/dev/null 2>&1 || true
+    fi
+    lxc start "$name" 2>/dev/null || true
+  else
+    lxc config set "$name" security.nesting true
+    lxc config set "$name" security.privileged true
+    lxc config set "$name" raw.lxc "$raw_lxc"
+    lxc config device add "$name" kmsg unix-char source=/dev/kmsg path=/dev/kmsg >/dev/null 2>&1 || true
+    if [[ -e /dev/kvm ]]; then
+      lxc config device add "$name" kvm unix-char source=/dev/kvm path=/dev/kvm >/dev/null 2>&1 || true
+    fi
+    if ! lxc info "$name" | grep -q '^Status: RUNNING'; then
+      lxc start "$name" 2>/dev/null || true
+    fi
+  fi
+
+  lxc exec "$name" -- cloud-init status --wait >/dev/null 2>&1 || true
+}
+
+write_devstack_local_conf() {
+  local name="$1"
+  local host_ip="$2"
+  local password="$3"
+
+  lxc exec "$name" -- bash -s -- "$host_ip" "$password" <<'EOS'
+set -euo pipefail
+host_ip="$1"
+password="$2"
+install -d -o stack -g stack /opt/stack/devstack
+cat >/opt/stack/devstack/local.conf <<EOF
+[[local|localrc]]
+ADMIN_PASSWORD=${password}
+DATABASE_PASSWORD=${password}
+RABBIT_PASSWORD=${password}
+SERVICE_PASSWORD=${password}
+HOST_IP=${host_ip}
+SERVICE_HOST=${host_ip}
+LOGFILE=/opt/stack/logs/stack.sh.log
+LOG_COLOR=False
+VERBOSE=True
+LIBVIRT_TYPE=qemu
+ENABLE_VOLUME_BACKING_FILE=True
+disable_service tempest
+EOF
+chown stack:stack /opt/stack/devstack/local.conf
+chmod 600 /opt/stack/devstack/local.conf
+EOS
+}
+
+devstack_openstack_ready() {
+  local name="$1"
+
+  lxc exec "$name" -- sudo -u stack -H bash -lc '
+    set -e
+    cd /opt/stack/devstack
+    [ -f openrc ] || exit 1
+    source openrc admin admin
+    openstack token issue -f value -c id >/dev/null
+  ' >/dev/null 2>&1
+}
+
+install_lxd_devstack() {
+  local name="$1"
+  local password="${HA_DEVSTACK_PASSWORD:-hybrid-ai-devstack}"
+  local branch="${HA_DEVSTACK_BRANCH:-master}"
+  local host_ip
+
+  host_ip="$(lxd_container_ip "$name")"
+  [[ -n "$host_ip" ]] || die "could not resolve LXD container IP for $name"
+
+  if devstack_openstack_ready "$name"; then
+    info "ok: local OpenStack already reachable in ${name}"
+    return
+  fi
+
+  info "Installing local OpenStack control plane with DevStack in LXD: ${name}"
+  lxc exec "$name" -- bash -lc '
+    set -euo pipefail
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y git sudo curl ca-certificates iproute2 net-tools python3-openstackclient
+    if ! id stack >/dev/null 2>&1; then
+      useradd -s /bin/bash -d /opt/stack -m stack
+    fi
+    chmod +x /opt/stack
+    printf "stack ALL=(ALL) NOPASSWD: ALL\n" >/etc/sudoers.d/stack
+    chmod 440 /etc/sudoers.d/stack
+    chown -R stack:stack /opt/stack
+  '
+
+  if ! lxc exec "$name" -- test -d /opt/stack/devstack/.git; then
+    lxc exec "$name" -- sudo -u stack -H bash -lc \
+      "git clone --depth=1 --branch '${branch}' https://opendev.org/openstack/devstack /opt/stack/devstack"
+  fi
+
+  write_devstack_local_conf "$name" "$host_ip" "$password"
+  lxc exec "$name" -- sudo -u stack -H bash -lc 'cd /opt/stack/devstack && ./stack.sh'
+}
+
+write_openstack_local_handoff() {
+  local name="$1"
+  local password="${HA_DEVSTACK_PASSWORD:-hybrid-ai-devstack}"
+  local ip
+  local dir="${HA_PROJECT_ROOT}/.ha/openstack-local"
+
+  ip="$(lxd_container_ip "$name")"
+  [[ -n "$ip" ]] || die "could not resolve LXD container IP for $name"
+
+  mkdir -p "$dir" "$HA_HANDOFF_DIR"
+  {
+    printf 'export OS_AUTH_URL=%q\n' "http://${ip}/identity/v3"
+    printf 'export OS_PROJECT_NAME=%q\n' "admin"
+    printf 'export OS_USERNAME=%q\n' "admin"
+    printf 'export OS_PASSWORD=%q\n' "$password"
+    printf 'export OS_USER_DOMAIN_NAME=%q\n' "Default"
+    printf 'export OS_PROJECT_DOMAIN_NAME=%q\n' "Default"
+    printf 'export OS_REGION_NAME=%q\n' "RegionOne"
+    printf 'export OS_IDENTITY_API_VERSION=%q\n' "3"
+  } >"${dir}/openrc.sh"
+  chmod 600 "${dir}/openrc.sh"
+
+  {
+    printf 'HA_OPENSTACK_CONTAINER=%q\n' "$name"
+    printf 'OS_AUTH_URL=%q\n' "http://${ip}/identity/v3"
+    printf 'OS_PROJECT_NAME=%q\n' "admin"
+    printf 'OS_USERNAME=%q\n' "admin"
+    printf 'OS_REGION_NAME=%q\n' "RegionOne"
+    printf 'OPENRC=%q\n' "${dir}/openrc.sh"
+  } >"${HA_HANDOFF_DIR}/local-openstack.env"
+  chmod 600 "${HA_HANDOFF_DIR}/local-openstack.env"
+  info "Wrote local OpenStack handoff: ${HA_HANDOFF_DIR#${HA_PROJECT_ROOT}/local-openstack.env}"
+  info "Source credentials with: source ${dir#${HA_PROJECT_ROOT}/}/openrc.sh"
+}
+
+run_openstack_local_provision() {
+  local auto_approve="$1"
+  local name
+
+  [[ "$auto_approve" -eq 1 ]] || die "ha up openstack-local installs OpenStack locally; pass --auto-approve"
+
+  name="$(openstack_lxd_container_name)"
+  ensure_openstack_lxd_container "$name"
+  install_lxd_devstack "$name"
+  if devstack_openstack_ready "$name"; then
+    info "ok: local OpenStack API is reachable"
+  else
+    lxc exec "$name" -- bash -lc 'tail -n 160 /opt/stack/logs/stack.sh.log 2>/dev/null || true'
+    die "local OpenStack did not become ready"
+  fi
+  write_openstack_local_handoff "$name"
+}
+
 run_tests() {
   local terraform_init=0
   local integration=0
@@ -2285,6 +2465,9 @@ run_up() {
       ;;
     lxd)
       run_lxd_provision "$auto_approve"
+      ;;
+    openstack-local|devstack)
+      run_openstack_local_provision "$auto_approve"
       ;;
     openstack|terraform)
       run_openstack_up "$auto_approve"
