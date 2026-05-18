@@ -133,6 +133,31 @@ variable "artifacts_s3_force_destroy" {
   default     = false
 }
 
+# ALB 변수
+variable "internal_alb_deletion_protection" {
+  description = "Whether to enable deletion protection for the internal ALB"
+  type        = bool
+  default     = false
+}
+
+variable "internal_alb_target_port" {
+  description = "Target port for the internal ALB target group"
+  type        = number
+  default     = 80
+}
+
+variable "internal_alb_target_type" {
+  description = "Target type for the internal ALB target group"
+  type        = string
+  default     = "ip"
+}
+
+variable "internal_alb_health_check_path" {
+  description = "Health check path for the internal ALB target group"
+  type        = string
+  default     = "/"
+}
+
 # VPN 변수
 variable "enable_site_to_site_vpn" {
   description = "Whether to create the Site-to-Site VPN resources"

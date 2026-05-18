@@ -68,6 +68,22 @@ output "artifacts_s3_bucket_name" {
   value       = aws_s3_bucket.artifacts.bucket
 }
 
+# ALB 출력
+output "internal_alb_arn" {
+  description = "Internal ALB ARN"
+  value       = aws_lb.internal.arn
+}
+
+output "internal_alb_dns_name" {
+  description = "Internal ALB DNS name"
+  value       = aws_lb.internal.dns_name
+}
+
+output "internal_alb_target_group_arn" {
+  description = "Internal ALB target group ARN"
+  value       = aws_lb_target_group.internal.arn
+}
+
 # VPN 출력
 output "vpn_gateway_id" {
   description = "VPN gateway ID"
