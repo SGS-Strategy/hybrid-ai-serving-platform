@@ -18,9 +18,9 @@ This directory contains the Ansible entrypoint for platform services deployed to
 
 ## Required variables
 
-Create a variable file in your secure environment and provide at least:
+Store the Grafana admin password in AWS SSM Parameter Store, then provide at least:
 
-- `grafana_admin_password`
+- `grafana_admin_password_ssm_name`
 
 Example file in this repository:
 
@@ -34,6 +34,17 @@ You can copy the example from:
 
 ```powershell
 ansible-galaxy collection install -r public/ansible/requirements.yml
+```
+
+## Store Grafana password in SSM
+
+```powershell
+aws ssm put-parameter `
+  --name "/sgs-hasp/monitoring/grafana_admin_password" `
+  --type "SecureString" `
+  --value "change-this-before-deploy" `
+  --overwrite `
+  --region ap-northeast-2
 ```
 
 ## Connect to EKS
@@ -63,4 +74,5 @@ helm list -n monitoring
 
 - The monitoring role deploys the `kube-prometheus-stack` chart.
 - Grafana and Prometheus pod settings are controlled through `roles/monitoring/templates/values.yaml.j2`.
+- The playbook reads `grafana_admin_password` from AWS SSM at runtime.
 - Do not commit real passwords to this repository.
