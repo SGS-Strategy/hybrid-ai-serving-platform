@@ -11,20 +11,20 @@ Workflow: `.github/workflows/private-cloud-foundation.yml`
 
 | Secret | 로컬 값 | 용도 |
 | --- | --- | --- |
-| `OPENSTACK_AUTH_URL` | `OS_AUTH_URL` | OpenStack Keystone endpoint |
-| `OPENSTACK_USERNAME` | `OS_USERNAME` | OpenStack user |
 | `OPENSTACK_PASSWORD` | `OS_PASSWORD` | OpenStack password |
-| `OPENSTACK_PROJECT_NAME` | `OS_PROJECT_NAME` | OpenStack project |
-| `OPENSTACK_USER_DOMAIN_NAME` | `OS_USER_DOMAIN_NAME` | OpenStack user domain |
-| `OPENSTACK_PROJECT_DOMAIN_NAME` | `OS_PROJECT_DOMAIN_NAME` | OpenStack project domain |
 | `PRIVATE_CLOUD_SSH_PUBLIC_KEY` | `TF_VAR_ssh_public_key` | VM SSH keypair public key |
-| `TF_BACKEND_CONFIG` | `TF_BACKEND_CONFIG` | apply/destroy용 Terraform remote state |
+| `TF_BACKEND_CONFIG` | `TF_BACKEND_CONFIG` | plan/apply/destroy용 Terraform remote state |
 | `PRIVATE_CLOUD_TFVARS` | `*.auto.tfvars` 내용 | CIDR, node count 등 환경별 Terraform override |
 
 ### GitHub Variables
 
 | Variable | 로컬 값 | 용도 |
 | --- | --- | --- |
+| `OPENSTACK_AUTH_URL` | `OS_AUTH_URL` | OpenStack Keystone endpoint |
+| `OPENSTACK_USERNAME` | `OS_USERNAME` | OpenStack user |
+| `OPENSTACK_PROJECT_NAME` | `OS_PROJECT_NAME` | OpenStack project |
+| `OPENSTACK_USER_DOMAIN_NAME` | `OS_USER_DOMAIN_NAME` | OpenStack user domain, 기본 `Default` |
+| `OPENSTACK_PROJECT_DOMAIN_NAME` | `OS_PROJECT_DOMAIN_NAME` | OpenStack project domain, 기본 `Default` |
 | `OPENSTACK_REGION` | `OS_REGION_NAME` | OpenStack region |
 | `CONTROL_PLANE_IMAGE_NAME` | `TF_VAR_control_plane_image_name` | control-plane VM image |
 | `CONTROL_PLANE_FLAVOR_NAME` | `TF_VAR_control_plane_flavor_name` | control-plane VM flavor |

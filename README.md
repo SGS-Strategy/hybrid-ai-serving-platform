@@ -1,4 +1,4 @@
-# Hybrid AI Serving Platform
+# Hybrid Event-Driven AI Serving Platform with SRE
 
 하이브리드 AI 서빙 플랫폼 프로젝트의 Repository 구조와 작업 기준을 정리한 가이드라인입니다.
 
@@ -9,17 +9,14 @@ hybrid-ai-serving-platform/
 ├─ README.md
 ├─ .github/
 │  └─ workflows/           # GitHub Actions CI/CD
-├─ apps/
-│  ├─ public/              # Public API / 외부 요청 진입점
-│  ├─ hybrid/              # Public-Private 연동 / routing
-│  └─ worker/              # 비동기 처리 worker
+├─ private/                # Private Cloud 역할 진입점 / 인계 README
+├─ public/                 # Public Cloud 역할 작업 영역
+│  ├─ terraform/           # AWS VPC, EKS, ECR, ALB, MSK 등
+│  └─ ansible/             # Public monitoring/service 배포 playbook
 ├─ services/
 │  └─ model/               # 모델 serving / packaging
 ├─ infra/
-│  ├─ private-cloud/       # OpenStack, Private K8s, GPU Worker, Storage
-│  ├─ public-cloud/        # AWS EKS, ECR, KServe, ALB
-│  ├─ kafka/               # Kafka topic, broker, async pipeline
-│  └─ monitoring/          # Prometheus, Loki, Grafana, Alert
+│  └─ private-cloud/       # OpenStack, Private K8s, GPU Worker, Storage 구현
 ├─ gitops/
 │  └─ kserve/              # ArgoCD가 동기화할 serving manifest
 ├─ packages/
