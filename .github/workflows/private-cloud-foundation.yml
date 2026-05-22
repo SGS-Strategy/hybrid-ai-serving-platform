@@ -61,12 +61,12 @@ jobs:
       run:
         working-directory: infra/private-cloud/openstack
     env:
-      OS_AUTH_URL: ${{ secrets.OPENSTACK_AUTH_URL }}
-      OS_USERNAME: ${{ secrets.OPENSTACK_USERNAME }}
+      OS_AUTH_URL: ${{ vars.OPENSTACK_AUTH_URL || secrets.OPENSTACK_AUTH_URL }}
+      OS_USERNAME: ${{ vars.OPENSTACK_USERNAME || secrets.OPENSTACK_USERNAME }}
       OS_PASSWORD: ${{ secrets.OPENSTACK_PASSWORD }}
-      OS_PROJECT_NAME: ${{ secrets.OPENSTACK_PROJECT_NAME }}
-      OS_USER_DOMAIN_NAME: ${{ secrets.OPENSTACK_USER_DOMAIN_NAME }}
-      OS_PROJECT_DOMAIN_NAME: ${{ secrets.OPENSTACK_PROJECT_DOMAIN_NAME }}
+      OS_PROJECT_NAME: ${{ vars.OPENSTACK_PROJECT_NAME || secrets.OPENSTACK_PROJECT_NAME }}
+      OS_USER_DOMAIN_NAME: ${{ vars.OPENSTACK_USER_DOMAIN_NAME || secrets.OPENSTACK_USER_DOMAIN_NAME || 'Default' }}
+      OS_PROJECT_DOMAIN_NAME: ${{ vars.OPENSTACK_PROJECT_DOMAIN_NAME || secrets.OPENSTACK_PROJECT_DOMAIN_NAME || 'Default' }}
       OS_REGION_NAME: ${{ vars.OPENSTACK_REGION }}
       OS_IDENTITY_API_VERSION: "3"
       TF_BACKEND_CONFIG: ${{ secrets.TF_BACKEND_CONFIG }}
@@ -147,6 +147,62 @@ jobs:
           fi
 
           exit "${missing}"
+
+      - name: Verify OpenStack login
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          auth_url = os.environ["OS_AUTH_URL"].rstrip("/")
+          if not auth_url.endswith("/v3"):
+              auth_url = f"{auth_url}/v3"
+
+          payload = {
+              "auth": {
+                  "identity": {
+                      "methods": ["password"],
+                      "password": {
+                          "user": {
+                              "name": os.environ["OS_USERNAME"],
+                              "domain": {"name": os.environ["OS_USER_DOMAIN_NAME"]},
+                              "password": os.environ["OS_PASSWORD"],
+                          }
+                      },
+                  },
+                  "scope": {
+                      "project": {
+                          "name": os.environ["OS_PROJECT_NAME"],
+                          "domain": {"name": os.environ["OS_PROJECT_DOMAIN_NAME"]},
+                      }
+                  },
+              }
+          }
+
+          request = urllib.request.Request(
+              f"{auth_url}/auth/tokens",
+              data=json.dumps(payload).encode("utf-8"),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  if response.status not in (200, 201):
+                      print(f"Unexpected Keystone status: {response.status}", file=sys.stderr)
+                      sys.exit(1)
+          except urllib.error.HTTPError as exc:
+              print(f"OpenStack Keystone login failed: HTTP {exc.code}", file=sys.stderr)
+              sys.exit(1)
+          except Exception as exc:
+              print(f"OpenStack Keystone login failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+              sys.exit(1)
+
+          print("ok: OpenStack Keystone login")
+          PY
 
       - name: Terraform init
         run: |
