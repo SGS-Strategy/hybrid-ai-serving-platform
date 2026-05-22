@@ -305,7 +305,7 @@ jobs:
             fi
 
             deadline=$((SECONDS + 900))
-            until ssh "${ssh_args[@]}" "${PRIVATE_CLOUD_SSH_USER}@${target}" "sudo cloud-init status --wait && sudo /usr/local/sbin/hybrid-ai-dependency-check"; do
+            until ssh -n "${ssh_args[@]}" "${PRIVATE_CLOUD_SSH_USER}@${target}" "sudo cloud-init status --wait && sudo /usr/local/sbin/hybrid-ai-dependency-check"; do
               if (( SECONDS >= deadline )); then
                 echo "::error::Dependency bootstrap did not pass for ${name} (${target})"
                 exit 1

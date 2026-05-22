@@ -61,7 +61,8 @@ jobs:
           install -m 755 "${RUNNER_TEMP}/actionlint" "${RUNNER_TEMP}/actionlint-bin"
 
       - name: Lint GitHub Actions workflows
-        run: "${RUNNER_TEMP}/actionlint-bin"
+        run: |
+          "${RUNNER_TEMP}/actionlint-bin"
 
       - name: Guard local-only secret files
         run: |
