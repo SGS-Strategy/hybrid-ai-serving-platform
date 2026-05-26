@@ -39,10 +39,12 @@ alertmanager:
   alertmanagerSpec:
     replicas: 1
     retention: 120h
+    nodeSelector:
+      workload: monitoring
     storage:
       volumeClaimTemplate:
         spec:
-          storageClassName: gp3
+          storageClassName: gp2
           accessModes: ["ReadWriteOnce"]
           resources:
             requests:
@@ -113,6 +115,8 @@ alertmanager:
 # ============================================================
 prometheus:
   prometheusSpec:
+    nodeSelector:
+      workload: monitoring
     retention: "15d"
     retentionSize: "45GB"
     scrapeInterval: "15s"
@@ -242,7 +246,7 @@ prometheus:
     storageSpec:
       volumeClaimTemplate:
         spec:
-          storageClassName: gp3
+          storageClassName: gp2
           accessModes: ["ReadWriteOnce"]
           resources:
             requests:
@@ -251,6 +255,10 @@ prometheus:
 # ============================================================
 # 기본 내장 컴포넌트
 # ============================================================
+prometheusOperator:
+  nodeSelector:
+    workload: monitoring
+
 nodeExporter:
   enabled: true
 
