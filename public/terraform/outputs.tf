@@ -61,6 +61,11 @@ output "eks_oidc_issuer" {
   value       = aws_eks_cluster.main.identity[0].oidc[0].issuer
 }
 
+output "ebs_csi_driver_role_arn" {
+  description = "IAM role ARN used by the EBS CSI driver addon"
+  value       = aws_iam_role.ebs_csi_driver.arn
+}
+
 output "eks_node_group_names" {
   description = "EKS managed node group names keyed by workload"
   value       = { for k, ng in aws_eks_node_group.workloads : k => ng.node_group_name }
