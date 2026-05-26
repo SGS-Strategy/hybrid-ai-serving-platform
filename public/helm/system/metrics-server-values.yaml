@@ -1,0 +1,4 @@
+replicas: 2
+args:
+  - --kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP
+  - --kubelet-insecure-tls
