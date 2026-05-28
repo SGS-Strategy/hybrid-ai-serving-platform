@@ -64,11 +64,3 @@ resource "aws_vpn_gateway_route_propagation" "private" {
   vpn_gateway_id = aws_vpn_gateway.main[0].id
   route_table_id = aws_route_table.private.id
 }
-
-# 라우트 전파 - 퍼블릭 라우팅 테이블 (ALB 응답 경로 확보용)
-resource "aws_vpn_gateway_route_propagation" "public" {
-  count = var.enable_site_to_site_vpn ? 1 : 0
-
-  vpn_gateway_id = aws_vpn_gateway.main[0].id
-  route_table_id = aws_route_table.public.id
-}
