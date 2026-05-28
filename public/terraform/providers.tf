@@ -8,6 +8,14 @@ terraform {
       version = "~> 5.0"
     }
   }
+
+  backend "s3" {
+    bucket         = "sgs-hasp-artifacts"
+    key            = "terraform/terraform.tfstate"
+    region         = "ap-northeast-2"
+    dynamodb_table = "sgs-hasp-terraform-lock"
+    encrypt        = true
+  }
 }
 
 # AWS Provider

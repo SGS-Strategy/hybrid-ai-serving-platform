@@ -82,6 +82,16 @@ variable "ecr_repositories" {
 }
 
 # EKS 변수
+variable "eks_public_access_cidrs" {
+  description = "CIDR blocks allowed to access the EKS public endpoint"
+  type        = list(string)
+  default = [
+    "221.150.194.220/32", # choi
+    "125.243.10.39/32",   # shin
+    "218.39.98.40 "       # kim
+  ]
+}
+
 variable "eks_cluster_version" {
   description = "Kubernetes version for the EKS cluster"
   type        = string
@@ -236,16 +246,13 @@ variable "enable_site_to_site_vpn" {
   default     = false
 }
 
-variable "customer_gateway_ip" {
-  description = "Public IP address of the customer gateway device"
-  type        = string
-  default     = ""
-}
-
-variable "customer_gateway_bgp_asn" {
-  description = "BGP ASN for the customer gateway"
-  type        = number
-  default     = 65000
+variable "customer_gateways" {
+  description = "Map of customer gateways keyed by site name"
+  type = map(object({
+    ip      = string
+    bgp_asn = number
+  }))
+  default = {}
 }
 
 variable "vpn_static_routes_only" {
@@ -255,7 +262,7 @@ variable "vpn_static_routes_only" {
 }
 
 variable "vpn_static_route_cidrs" {
-  description = "Static route CIDR blocks for the Site-to-Site VPN connection"
-  type        = list(string)
-  default     = []
+  description = "Static route CIDR blocks per site for the Site-to-Site VPN connections"
+  type        = map(list(string))
+  default     = {}
 }
