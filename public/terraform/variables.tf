@@ -116,7 +116,7 @@ variable "eks_node_groups" {
   }))
   default = {
     inference = {
-      instance_types  = ["c6i.xlarge"]
+      instance_types  = ["m7i-flex.large"] # ["c6i.xlarge"]
       az_count        = 3
       desired_size    = 2
       min_size        = 1
@@ -126,7 +126,7 @@ variable "eks_node_groups" {
       use_mgmt_subnet = false
     }
     app = {
-      instance_types  = ["t3.medium"]
+      instance_types  = ["m7i-flex.large"] # ["t3.medium"]
       az_count        = 3
       desired_size    = 2
       min_size        = 1
@@ -136,7 +136,7 @@ variable "eks_node_groups" {
       use_mgmt_subnet = false
     }
     system = {
-      instance_types  = ["t3.medium"]
+      instance_types  = ["m7i-flex.large"] # ["t3.medium"]
       az_count        = 2
       desired_size    = 2
       min_size        = 2
@@ -146,7 +146,7 @@ variable "eks_node_groups" {
       use_mgmt_subnet = false
     }
     monitoring = {
-      instance_types  = ["t3.large"]
+      instance_types  = ["m7i-flex.large"] # ["t3.large"]
       az_count        = 2
       desired_size    = 1
       min_size        = 1
@@ -156,7 +156,7 @@ variable "eks_node_groups" {
       use_mgmt_subnet = false
     }
     management = {
-      instance_types  = ["t3.medium"]
+      instance_types  = ["m7i-flex.large"] # ["t3.medium"]
       az_count        = 1
       desired_size    = 1
       min_size        = 1
