@@ -235,6 +235,54 @@ prometheus:
       #       regex: (.+);(.+)
       #       replacement: "${1}:${2}"
 
+      # ──────────────────────────────────────────────────────
+      # [① 문경호 Private Cloud 완성 후 주석 해제]
+      # Private Cloud 인프라 메트릭 — VPN 통해 직접 수집 (Pull 방식)
+      #
+      # 사전 작업 (Private Cloud에 설치):
+      #   1. node_exporter 설치 (각 노드에 DaemonSet 또는 systemd)
+      #   2. kube-state-metrics 설치 (Private K8s 클러스터)
+      #
+      # PRIVATE_NODE_IP_1, PRIVATE_NODE_IP_2 → 실제 Private Cloud 노드 IP로 교체
+      # PRIVATE_KSM_IP → kube-state-metrics 파드 IP로 교체
+      # ──────────────────────────────────────────────────────
+
+      # Private Cloud 노드 메트릭 (node_exporter :9100)
+      # - job_name: "private-node-exporter"
+      #   static_configs:
+      #     - targets:
+      #         - "PRIVATE_NODE_IP_1:9100"
+      #         - "PRIVATE_NODE_IP_2:9100"
+      #       labels:
+      #         cluster: "private-openstack"
+      #         environment: "private"
+      #   scrape_interval: 30s
+      #   relabel_configs:
+      #     - source_labels: [__address__]
+      #       regex: "([^:]+):.*"
+      #       target_label: instance
+      #       replacement: "${1}"
+
+      # Private K8s 상태 메트릭 (kube-state-metrics :8080)
+      # - job_name: "private-kube-state-metrics"
+      #   static_configs:
+      #     - targets:
+      #         - "PRIVATE_KSM_IP:8080"
+      #       labels:
+      #         cluster: "private-openstack"
+      #         environment: "private"
+      #   scrape_interval: 30s
+
+      # Private etcd 메트릭 (etcd :2381)
+      # - job_name: "private-etcd"
+      #   static_configs:
+      #     - targets:
+      #         - "PRIVATE_NODE_IP_1:2381"
+      #       labels:
+      #         cluster: "private-openstack"
+      #         environment: "private"
+      #   scrape_interval: 30s
+
     resources:
       requests:
         cpu: "500m"
