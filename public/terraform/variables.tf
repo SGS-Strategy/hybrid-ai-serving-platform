@@ -77,7 +77,11 @@ variable "ecr_repositories" {
   description = "ECR repository names"
   type        = list(string)
   default = [
-    "dnn-model"
+    "dnn-model",
+    "inference-api",
+    "inference-worker",
+    "result-consumer",
+    "predictor",
   ]
 }
 
