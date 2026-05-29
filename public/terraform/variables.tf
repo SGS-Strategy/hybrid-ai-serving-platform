@@ -233,8 +233,14 @@ variable "internal_alb_health_check_path" {
   default     = "/"
 }
 
+variable "private_cloud_cidrs" {
+  description = "Private Cloud 사이트 CIDR (VPCE 경유로 ECR/S3/STS 등 AWS 서비스 접근 허용)"
+  type        = list(string)
+  default     = []
+}
+
 variable "edge_network_cidrs" {
-  description = "On-premise / edge (factory) CIDR blocks allowed to reach the internal ALB over VPN"
+  description = "Edge(공장) 사이트 CIDR (VPN 경유로 Internal ALB 접근 허용)"
   type        = list(string)
   default     = []
 }
