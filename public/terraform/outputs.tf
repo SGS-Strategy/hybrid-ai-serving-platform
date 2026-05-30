@@ -19,11 +19,6 @@ output "msk_private_subnet_ids" {
   value       = aws_subnet.msk_private[*].id
 }
 
-output "mgmt_private_subnet_id" {
-  description = "ID of the management/CI-CD private subnet"
-  value       = aws_subnet.mgmt_private.id
-}
-
 output "nat_gateway_id" {
   description = "ID of the single NAT gateway"
   value       = aws_nat_gateway.main.id
