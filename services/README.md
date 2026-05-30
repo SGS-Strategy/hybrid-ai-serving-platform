@@ -13,7 +13,7 @@ to ECR with the commit SHA tag.
 - `inference-api`: public-facing HTTP API that forwards inference requests to the predictor
 - `inference-worker`: background worker placeholder for Kafka request processing
 - `result-consumer`: background worker placeholder for Kafka result processing
-- `predictor`: model-serving HTTP service compatible with simple JSON inference calls
+- `kserve-predictor`: model-serving HTTP service compatible with simple JSON inference calls
 
 ## Local build
 
@@ -21,7 +21,7 @@ to ECR with the commit SHA tag.
 docker build -t inference-api:local services/inference-api
 docker build -t inference-worker:local services/inference-worker
 docker build -t result-consumer:local services/result-consumer
-docker build -t predictor:local services/predictor
+docker build -t kserve-predictor:local services/kserve-predictor
 ```
 
 ## ECR push example
@@ -34,7 +34,7 @@ docker build -t 808379768010.dkr.ecr.ap-northeast-2.amazonaws.com/inference-api:
 docker push 808379768010.dkr.ecr.ap-northeast-2.amazonaws.com/inference-api:latest
 ```
 
-Repeat the same pattern for `inference-worker`, `result-consumer`, and `predictor`.
+Repeat the same pattern for `inference-worker`, `result-consumer`, and `kserve-predictor`.
 
 ## GitHub Actions
 

@@ -34,7 +34,7 @@ jobs:
           - inference-api
           - inference-worker
           - result-consumer
-          - predictor
+          - kserve-predictor
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -55,7 +55,7 @@ jobs:
           - inference-api
           - inference-worker
           - result-consumer
-          - predictor
+          - kserve-predictor
     steps:
       - name: Checkout
         uses: actions/checkout@v6

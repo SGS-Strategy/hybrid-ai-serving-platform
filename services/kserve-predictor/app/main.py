@@ -13,7 +13,7 @@ class PredictionRequest(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
-app = FastAPI(title="predictor", version="0.1.0")
+app = FastAPI(title="kserve-predictor", version="0.1.0")
 
 
 @app.get("/healthz")

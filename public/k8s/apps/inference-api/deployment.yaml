@@ -15,6 +15,6 @@ spec:
     spec:
       containers:
         - name: inference-api
-          image: replace-me
+          image: 808379768010.dkr.ecr.ap-northeast-2.amazonaws.com/inference-api:latest
           ports:
             - containerPort: 8080

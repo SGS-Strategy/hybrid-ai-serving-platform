@@ -17,7 +17,7 @@ logger = logging.getLogger("inference-worker")
 def _predict_url() -> str:
     base_url = os.getenv(
         "PREDICTOR_URL",
-        "http://predictor-predictor-default.inference.svc.cluster.local",
+        "http://kserve-predictor.hasp.svc.cluster.local",
     ).rstrip("/")
     endpoint = os.getenv("PREDICTOR_ENDPOINT", "/v1/models/default:predict")
     return f"{base_url}{endpoint}"

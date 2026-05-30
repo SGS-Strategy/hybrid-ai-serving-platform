@@ -15,4 +15,4 @@ spec:
     spec:
       containers:
         - name: result-consumer
-          image: replace-me
+          image: 808379768010.dkr.ecr.ap-northeast-2.amazonaws.com/result-consumer:latest

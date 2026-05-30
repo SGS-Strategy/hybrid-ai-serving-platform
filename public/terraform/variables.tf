@@ -72,16 +72,16 @@ variable "nat_gateway_az_index" {
   default     = 1
 }
 
-# ECR 변수
+# ECR 리포지토리 변수
 variable "ecr_repositories" {
   description = "ECR repository names"
   type        = list(string)
   default = [
-    "dnn-model",
+    "predictive-model",
     "inference-api",
     "inference-worker",
     "result-consumer",
-    "predictor",
+    "kserve-predictor",
   ]
 }
 
