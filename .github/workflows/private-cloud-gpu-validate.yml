@@ -166,8 +166,8 @@ jobs:
           set -euo pipefail
 
           image_name="${GPU_WORKER_IMAGE_NAME:-}"
-          flavor_name="${GPU_WORKER_FLAVOR_NAME:-}"
-          if [[ -z "$image_name" || -z "$flavor_name" ]]; then
+          source_flavor_name="${GPU_WORKER_FLAVOR_NAME:-}"
+          if [[ -z "$image_name" || -z "$source_flavor_name" ]]; then
             echo "::error::GPU_WORKER_IMAGE_NAME and GPU_WORKER_FLAVOR_NAME variables are required"
             exit 1
           fi
@@ -188,7 +188,7 @@ jobs:
           region_name="$6"
           password_file="$7"
           image_name="$8"
-          flavor_name="$9"
+          source_flavor_name="$9"
           resource_prefix="${10}"
           run_id="${11}"
           run_attempt="${12}"
@@ -207,9 +207,12 @@ jobs:
           subnet_name="${resource_prefix}-subnet"
           router_name="${resource_prefix}-router"
           security_group_name="${resource_prefix}-sg"
+          flavor_name="${resource_prefix}-flavor"
           server_name="${resource_prefix}-vm"
           user_data="/tmp/${resource_prefix}.user-data.sh"
           console_log="/tmp/${resource_prefix}.console.log"
+          source_flavor_json="/tmp/${resource_prefix}.source-flavor.json"
+          source_image_json="/tmp/${resource_prefix}.source-image.json"
 
           subnet_second=$(( (run_id % 200) + 20 ))
           subnet_third=$(( ((run_id / 200) + run_attempt) % 250 ))
@@ -233,6 +236,7 @@ jobs:
               openstack server delete "$server_name" || true
               wait_for_server_delete "$server_name" || true
             fi
+            openstack flavor delete "$flavor_name" >/dev/null 2>&1 || true
             if openstack router show "$router_name" >/dev/null 2>&1; then
               openstack router remove subnet "$router_name" "$subnet_name" >/dev/null 2>&1 || true
               openstack router unset --external-gateway "$router_name" >/dev/null 2>&1 || true
@@ -241,13 +245,14 @@ jobs:
             openstack subnet delete "$subnet_name" >/dev/null 2>&1 || true
             openstack network delete "$network_name" >/dev/null 2>&1 || true
             openstack security group delete "$security_group_name" >/dev/null 2>&1 || true
+            rm -f "$source_flavor_json" "$source_image_json"
             echo "Temporary GPU validation resources cleaned up"
           }
 
           # shellcheck disable=SC2317
           cleanup() {
             cleanup_resources
-            rm -f "$password_file" "$user_data" "$console_log"
+            rm -f "$password_file" "$user_data" "$console_log" "$source_flavor_json" "$source_image_json"
           }
           trap cleanup EXIT
           trap 'cleanup; exit 130' INT TERM
@@ -328,12 +333,12 @@ jobs:
           echo "GPU validation resource prefix: $resource_prefix"
           echo "GPU validation server: $server_name"
           echo "GPU validation image: $image_name"
-          echo "GPU validation flavor: $flavor_name"
+          echo "GPU validation source flavor: $source_flavor_name"
           echo "GPU validation subnet CIDR: $validation_cidr"
 
           openstack token issue -f value -c id >/dev/null
-          openstack image show "$image_name" >/dev/null
-          openstack flavor show "$flavor_name" >/dev/null
+          openstack image show "$image_name" -f json > "$source_image_json"
+          openstack flavor show "$source_flavor_name" -f json > "$source_flavor_json"
 
           external_network_id="$(openstack network show public -f value -c id 2>/dev/null || true)"
           if [[ -z "$external_network_id" ]]; then
@@ -347,6 +352,47 @@ jobs:
           echo "GPU validation external network: $external_network_name ($external_network_id)"
 
           cleanup_resources
+
+          read -r temp_flavor_ram temp_flavor_vcpus temp_flavor_disk < <(
+            python3 - "$source_flavor_json" "$source_image_json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], "r", encoding="utf-8") as handle:
+              source_flavor = json.load(handle)
+          with open(sys.argv[2], "r", encoding="utf-8") as handle:
+              source_image = json.load(handle)
+
+          source_disk = int(source_flavor.get("disk") or 20)
+          image_min_disk = int(source_image.get("min_disk") or 0)
+          disk = max(1, image_min_disk, min(source_disk, 20))
+          ram = max(512, int(source_flavor.get("ram") or 2048), int(source_image.get("min_ram") or 0))
+          vcpus = max(1, int(source_flavor.get("vcpus") or 1))
+          print(ram, vcpus, disk)
+          PY
+          )
+
+          openstack flavor create \
+            --ram "$temp_flavor_ram" \
+            --vcpus "$temp_flavor_vcpus" \
+            --disk "$temp_flavor_disk" \
+            "$flavor_name" >/dev/null
+          while IFS=$'\t' read -r key value; do
+            [[ -z "${key:-}" ]] && continue
+            openstack flavor set --property "${key}=${value}" "$flavor_name"
+          done < <(
+            python3 - "$source_flavor_json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], "r", encoding="utf-8") as handle:
+              source_flavor = json.load(handle)
+
+          for key, value in (source_flavor.get("properties") or {}).items():
+              print(f"{key}\t{value}")
+          PY
+          )
+          echo "GPU validation temporary flavor: $flavor_name (${temp_flavor_ram}MB RAM, ${temp_flavor_vcpus} vCPU, ${temp_flavor_disk}GB disk)"
 
           openstack network create "$network_name" >/dev/null
           openstack subnet create \
@@ -445,7 +491,7 @@ jobs:
               "${OS_REGION_NAME}" \
               "$password_file" \
               "$image_name" \
-              "$flavor_name" \
+              "$source_flavor_name" \
               "$resource_prefix" \
               "${GPU_VALIDATION_RUN_ID}" \
               "${GPU_VALIDATION_RUN_ATTEMPT}" \
@@ -461,7 +507,7 @@ jobs:
               "${OS_REGION_NAME}" \
               "$password_file" \
               "$image_name" \
-              "$flavor_name" \
+              "$source_flavor_name" \
               "$resource_prefix" \
               "${GPU_VALIDATION_RUN_ID}" \
               "${GPU_VALIDATION_RUN_ATTEMPT}" | tee "$log_file"
@@ -485,6 +531,7 @@ jobs:
           pci_devices="$(grep -Ei 'NVIDIA|3D|VGA' "$log_file" | tail -n 20 || true)"
           gpu_query="$(awk '/^index, name, pci.bus_id/{flag=1; print; next} flag && NF {print; count++} count >= 8 {exit}' "$log_file" || true)"
           external_network="$(grep -m1 '^GPU validation external network:' "$log_file" | cut -d: -f2- | xargs || true)"
+          temporary_flavor="$(grep -m1 '^GPU validation temporary flavor:' "$log_file" | cut -d: -f2- | xargs || true)"
           validation_cidr="$(grep -m1 '^GPU validation subnet CIDR:' "$log_file" | cut -d: -f2- | xargs || true)"
           network_info="$(grep -m1 '^GPU validation network:' "$log_file" | cut -d: -f2- | xargs || true)"
           security_group_info="$(grep -m1 '^GPU validation security group:' "$log_file" | cut -d: -f2- | xargs || true)"
@@ -502,7 +549,8 @@ jobs:
             echo "| Temporary security group | \`${security_group_info:-unknown}\` |"
             echo "| External network | \`${external_network:-unknown}\` |"
             echo "| Image | \`${image_name}\` |"
-            echo "| Flavor | \`${flavor_name}\` |"
+            echo "| Source flavor | \`${source_flavor_name}\` |"
+            echo "| Temporary flavor | \`${temporary_flavor:-unknown}\` |"
             echo "| GPU PCI detected | \`${gpu_pci_detected:-unknown}\` |"
             echo "| nvidia-smi OK | \`${nvidia_smi_ok:-unknown}\` |"
             echo
