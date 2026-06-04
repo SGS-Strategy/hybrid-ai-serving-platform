@@ -79,7 +79,7 @@ variable "eks_public_access_cidrs" {
   default = [
     "221.150.194.220/32", # choi
     "125.243.10.39/32",   # shin
-    "218.39.98.40 "       # kim
+    "218.39.98.40/32"     # kim
   ]
 }
 
@@ -187,7 +187,7 @@ variable "msk_topic_configs" {
   description = "Topic-level MSK configuration properties to apply when creating or updating topics"
   type        = map(string)
   default = {
-    min.insync.replicas = "2"
+    "min.insync.replicas" = "2"
   }
 }
 
