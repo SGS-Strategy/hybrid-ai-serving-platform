@@ -24,7 +24,7 @@ private/
 3. `bootstrap_kubernetes=true`이면 Terraform output node inventory 기준으로 kubeadm 기반 Kubernetes bootstrap을 진행합니다.
 4. `apply_kubernetes=true`이면 namespace, quota, RBAC, network policy baseline을 적용합니다.
 5. DNS는 foundation 생명주기와 같이 움직입니다. Plan은 dry-run, Apply는 Cloudflare upsert, Destroy는 Cloudflare delete를 실행합니다.
-6. `setup_storage=true`, `validate_gpu=true`는 실제 NFS/GPU backing 준비가 끝난 뒤 선택적으로 켭니다.
+6. `setup_storage=true`는 실제 NFS backing 준비 후 선택합니다. `validate_gpu=true`는 임시 OpenStack network/subnet/router/security group/VM을 생성해 passthrough를 검증하고 종료 시 삭제합니다.
 7. 제거는 `Private Cloud Destroy` workflow로 실행합니다.
 8. `handoff/` 문서를 기준으로 model, public, hybrid, monitoring 담당자에게 필요한 값을 전달합니다.
 
@@ -180,6 +180,7 @@ Workflow 경로:
 - `.github/workflows/private-cloud-plan.yml`: push 또는 수동 plan, Terraform plan, DNS dry-run
 - `.github/workflows/private-cloud-apply.yml`: 수동 apply, Terraform apply, DNS upsert, Kubernetes bootstrap/storage
 - `.github/workflows/private-cloud-destroy.yml`: 수동 destroy, Kubernetes cleanup, Terraform destroy, DNS delete
+- `.github/workflows/private-cloud-gpu-validate.yml`: 수동 또는 apply 후 격리된 임시 OpenStack 리소스로 GPU passthrough 검증
 - `.github/workflows/private-cloud-foundation.yml`: UI에서 직접 실행하지 않는 reusable core
 
 필수 GitHub Secrets:

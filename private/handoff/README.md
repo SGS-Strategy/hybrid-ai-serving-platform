@@ -18,7 +18,7 @@ repository에 기록하지 않습니다.
 | GPU-worker node inventory | Terraform output `gpu_worker_nodes` | Model serving, GPU 검증 |
 | Namespace 기준 | `kubernetes/` manifest | Model, worker, monitoring |
 | Storage 기준 | `storage/` manifest | Model build, artifact 관리 |
-| GPU 검증 기준 | `gpu-worker/` manifest | Model serving, reliability |
+| GPU 검증 기준 | `.github/workflows/private-cloud-gpu-validate.yml`, `gpu-worker/` manifest | Model serving, reliability |
 
 ## 담당 범위
 
@@ -27,7 +27,8 @@ Private Cloud Foundation에서 담당하는 것:
 - OpenStack network, subnet, router attachment, security group, key pair, VM group
 - Kubernetes namespace, quota, RBAC, network policy 기준
 - private build cache와 model artifact용 StorageClass/PVC 예시
-- GPU RuntimeClass와 `nvidia-smi` 검증 Job 골격
+- 격리된 임시 OpenStack 리소스를 사용하는 GPU passthrough 검증 workflow
+- GPU RuntimeClass와 Kubernetes GPU 검증 Job 골격
 
 Private Cloud Foundation에서 담당하지 않는 것:
 
@@ -48,4 +49,5 @@ Private Cloud Foundation에서 담당하지 않는 것:
 - model build PVC 이름: `model-build-cache`
 - model artifact PVC 이름: `model-artifacts`
 - GPU RuntimeClass 이름: `nvidia`
-- GPU 검증 Job 이름: `nvidia-smi-validation`
+- OpenStack GPU passthrough 검증 결과: `Private Cloud GPU Validate` workflow summary
+- Kubernetes GPU 검증 Job 이름: `gpu-validation`
