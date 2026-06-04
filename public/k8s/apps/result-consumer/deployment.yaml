@@ -1,24 +1,24 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: inference-worker
+  name: result-consumer
   namespace: inference
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: inference-worker
+      app: result-consumer
   template:
     metadata:
       labels:
-        app: inference-worker
+        app: result-consumer
     spec:
       serviceAccountName: worker-sa
       nodeSelector:
         workload: app
       containers:
-        - name: inference-worker
-          image: 808379768010.dkr.ecr.ap-northeast-2.amazonaws.com/inference-worker:latest
+        - name: result-consumer
+          image: 808379768010.dkr.ecr.ap-northeast-2.amazonaws.com/result-consumer:latest
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
