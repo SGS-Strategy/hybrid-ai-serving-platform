@@ -151,7 +151,7 @@ HA_* 환경 변수는 이 프로젝트 전용 prefix이며, High Availability �
   - ha test --terraform-init은 OpenStack Terraform provider를 내려받고 validate까지 수행합니다.
   - ha test --integration은 선택 provider 기준으로 변경 전 검증을 수행합니다.
   - ha env init으로 .env와 .env.secret 템플릿을 만들면 ha가 자동으로 읽습니다.
-  - 기본 .env는 HA_PROVIDER=auto와 k3s provisioning 옵션만 둡니다.
+  - 기본 .env는 HA_PROVIDER=auto와 Kubernetes provisioning 옵션만 둡니다.
   - auto provider는 sudo 가능 시 local, 아니면 LXD를 선택합니다.
   - .env.secret은 local/LXD provider에서는 보통 비어 있습니다.
 
@@ -166,12 +166,12 @@ HA_* 환경 변수는 이 프로젝트 전용 prefix이며, High Availability �
   ha up gpu
 
   - 기본 provider는 auto입니다.
-  - ha up local은 현재 서버에 k3s Kubernetes를 설치하고 kubeconfig를 .ha/kubeconfig로 받습니다.
-  - ha up lxd는 sudo 없이 LXD 컨테이너 안에 k3s Kubernetes를 설치합니다.
+  - ha up local은 현재 서버에 kubeadm 기반 Kubernetes를 설치하고 kubeconfig를 .ha/kubeconfig로 받습니다.
+  - ha up lxd는 sudo 없이 LXD 컨테이너 안에 kubeadm 기반 Kubernetes를 설치합니다.
   - ha up openstack-local은 LXD 컨테이너 안에 DevStack 기반 로컬 OpenStack control plane을 설치합니다.
-  - ha up all은 provider가 local/LXD이면 k3s provisioning 후 Kubernetes baseline manifest를 적용합니다.
+  - ha up all은 provider가 local/LXD이면 Kubernetes provisioning 후 Kubernetes baseline manifest를 적용합니다.
   - ha up openstack은 HA_PROVIDER=openstack일 때 Terraform apply로 OpenStack 리소스를 생성/변경합니다.
-  - ha up openstack-kubernetes는 Terraform output node inventory를 기준으로 k3s를 bootstrap합니다.
+  - ha up openstack-kubernetes는 Terraform output node inventory를 기준으로 Kubernetes를 bootstrap합니다.
   - ha up kubernetes|storage|gpu는 현재 kubeconfig 대상 cluster에 manifest를 적용합니다.
   - storage/gpu는 기본 all에 포함하지 않습니다. HA_APPLY_STORAGE=1, HA_APPLY_GPU=1일 때 local all에 포함합니다.
   - ha prod check는 현재 kubeconfig 대상이 production 기준을 만족하는지 검사합니다.
@@ -233,7 +233,7 @@ required_project_paths() {
   printf '%s\n' \
     "${HA_OPENSTACK_DIR}/main.tf" \
     "${HA_OPENSTACK_DIR}/variables.tf" \
-    "${HA_OPENSTACK_BOOTSTRAP_DIR}/bootstrap-k3s.sh" \
+    "${HA_OPENSTACK_BOOTSTRAP_DIR}/bootstrap-k8s.sh" \
     "${HA_REVERSE_PROXY_DIR}/Caddyfile" \
     "${HA_REVERSE_PROXY_DIR}/cloudflare_dns.py" \
     "${HA_PROJECT_ROOT}/private/kubernetes/kustomization.yaml" \
@@ -1277,24 +1277,27 @@ env_template() {
 # Default mode picks direct local provisioning when sudo is available, otherwise LXD.
 export HA_PROVIDER="${HA_PROVIDER:-auto}"
 export HA_CLUSTER_NAME="${HA_CLUSTER_NAME:-hybrid-ai-private}"
-export HA_K8S_DISTRO="${HA_K8S_DISTRO:-k3s}"
 export HA_LOCAL_KUBECONFIG="${HA_LOCAL_KUBECONFIG:-.ha/kubeconfig}"
-export HA_LXD_CONTAINER="${HA_LXD_CONTAINER:-ha-k3s}"
+export HA_LXD_CONTAINER="${HA_LXD_CONTAINER:-ha-k8s}"
 export HA_OPENSTACK_CONTAINER="${HA_OPENSTACK_CONTAINER:-ha-openstack}"
 
-# k3s install settings for local/LXD provisioning.
-export HA_K3S_CHANNEL="${HA_K3S_CHANNEL:-stable}"
-export HA_K3S_EXEC="${HA_K3S_EXEC:-server --write-kubeconfig-mode 644 --disable traefik}"
+# Kubernetes install settings for local/LXD/OpenStack VM provisioning.
+export HA_K8S_VERSION_MINOR="${HA_K8S_VERSION_MINOR:-v1.36}"
+export HA_K8S_POD_CIDR="${HA_K8S_POD_CIDR:-192.168.0.0/16}"
+export HA_K8S_CNI_MANIFEST="${HA_K8S_CNI_MANIFEST:-https://raw.githubusercontent.com/projectcalico/calico/v3.32.0/manifests/calico.yaml}"
+export HA_K8S_KUBEADM_IGNORE_PREFLIGHT="${HA_K8S_KUBEADM_IGNORE_PREFLIGHT:-NumCPU}"
 
 # Local OpenStack control plane settings for ha up openstack-local.
 export HA_OPENSTACK_LXD_IMAGE="${HA_OPENSTACK_LXD_IMAGE:-ubuntu:24.04}"
 export HA_DEVSTACK_BRANCH="${HA_DEVSTACK_BRANCH:-master}"
 export HA_DEVSTACK_PASSWORD="${HA_DEVSTACK_PASSWORD:-hybrid-ai-devstack}"
+export TF_BACKEND_TYPE="${TF_BACKEND_TYPE:-s3}"
 
 # OpenStack VM Kubernetes bootstrap settings.
 export HA_OPENSTACK_KUBECONFIG="${HA_OPENSTACK_KUBECONFIG:-.ha/openstack/kubeconfig}"
 export HA_OPENSTACK_SSH_USER="${HA_OPENSTACK_SSH_USER:-ubuntu}"
 export HA_OPENSTACK_SSH_TARGET="${HA_OPENSTACK_SSH_TARGET:-auto}"
+export HA_K8S_API_ENDPOINT="${HA_K8S_API_ENDPOINT:-}"
 # export HA_OPENSTACK_SSH_PROXY_CONTAINER="ha-openstack"
 
 # Baseline Kubernetes manifests are applied by default after provisioning.
@@ -1346,7 +1349,7 @@ secret_env_template() {
 
 # Existing Kubernetes access, only needed when applying to an already-created cluster.
 # export KUBECONFIG="/path/to/private-cluster-kubeconfig"
-# export PRIVATE_KUBECONFIG_B64="base64-encoded-kubeconfig"
+# export PRIVATE_CLOUD_KUBECONFIG_B64="base64-encoded-kubeconfig"
 
 # Cloudflare DNS automation and Caddy DNS-01 certificate issuance.
 # Required permissions: Zone:Read and DNS:Edit scoped to the intp.me zone.
@@ -1634,7 +1637,7 @@ run_env() {
           if can_run_privileged; then
             info "ok: privileged local provisioning is available"
           else
-            info "warn: sudo password is required before local provisioning can install k3s"
+            info "warn: sudo password is required before local provisioning can install Kubernetes"
           fi
           ;;
         lxd)
@@ -1825,6 +1828,8 @@ test_terraform_plan() {
 HA_KUBECONFIG_DECODED=0
 
 configure_kubeconfig_from_env() {
+  local kubeconfig_b64
+
   HA_KUBECONFIG_DECODED=0
 
   if [[ -n "${KUBECONFIG:-}" ]]; then
@@ -1832,17 +1837,19 @@ configure_kubeconfig_from_env() {
   fi
 
   if [[ -f "$(openstack_kubeconfig_path)" ]]; then
-    export KUBECONFIG="$(openstack_kubeconfig_path)"
+    KUBECONFIG="$(openstack_kubeconfig_path)"
+    export KUBECONFIG
     return 0
   fi
 
-  if [[ -z "${PRIVATE_KUBECONFIG_B64:-}" ]]; then
+  kubeconfig_b64="${PRIVATE_CLOUD_KUBECONFIG_B64:-}"
+  if [[ -z "$kubeconfig_b64" ]]; then
     return 0
   fi
 
   local kubeconfig
   kubeconfig="$(mktemp)"
-  if printf "%s" "$PRIVATE_KUBECONFIG_B64" | base64 -d >"$kubeconfig"; then
+  if printf "%s" "$kubeconfig_b64" | base64 -d >"$kubeconfig"; then
     chmod 600 "$kubeconfig"
     export KUBECONFIG="$kubeconfig"
     HA_KUBECONFIG_DECODED=1
@@ -1857,7 +1864,8 @@ prepare_kubeconfig() {
   case "$(current_provider)" in
     local|server|lxd)
       if [[ -f "$(local_kubeconfig_path)" ]]; then
-        export KUBECONFIG="$(local_kubeconfig_path)"
+        KUBECONFIG="$(local_kubeconfig_path)"
+        export KUBECONFIG
         return
       fi
       test_fail "local kubeconfig not found; run ha up all --auto-approve"
@@ -1865,13 +1873,13 @@ prepare_kubeconfig() {
     *)
       if configure_kubeconfig_from_env; then
         if [[ "$HA_KUBECONFIG_DECODED" -eq 1 ]]; then
-          test_ok "decoded PRIVATE_KUBECONFIG_B64"
+          test_ok "decoded PRIVATE_CLOUD_KUBECONFIG_B64"
         fi
         if [[ -z "${KUBECONFIG:-}" ]]; then
           test_fail "OpenStack kubeconfig not found; run ha up openstack-kubernetes --auto-approve or set KUBECONFIG"
         fi
       else
-        test_fail "decode PRIVATE_KUBECONFIG_B64"
+        test_fail "decode PRIVATE_CLOUD_KUBECONFIG_B64"
       fi
       ;;
   esac
@@ -1960,9 +1968,9 @@ configure_local_kubeconfig() {
     return 0
   fi
 
-  if [[ -f /etc/rancher/k3s/k3s.yaml ]]; then
+  if [[ -f /etc/kubernetes/admin.conf ]]; then
     mkdir -p "$(dirname "$kubeconfig")"
-    if run_privileged cat /etc/rancher/k3s/k3s.yaml >"$kubeconfig"; then
+    if run_privileged cat /etc/kubernetes/admin.conf >"$kubeconfig"; then
       chmod 600 "$kubeconfig"
       export KUBECONFIG="$kubeconfig"
       return 0
@@ -1972,22 +1980,84 @@ configure_local_kubeconfig() {
   return 1
 }
 
-install_local_k3s() {
-  local install_script
-
+configure_k8s_node_packages_local() {
   require_tool curl
   require_privileged
 
-  install_script="$(mktemp)"
-  curl -sfL https://get.k3s.io -o "$install_script"
-  chmod 700 "$install_script"
+  run_privileged bash -s -- "${HA_K8S_VERSION_MINOR:-v1.36}" <<'EOS'
+set -euo pipefail
+version_minor="$1"
 
-  run_privileged env \
-    INSTALL_K3S_CHANNEL="${HA_K3S_CHANNEL:-stable}" \
-    INSTALL_K3S_EXEC="${HA_K3S_EXEC:-server --write-kubeconfig-mode 644 --disable traefik}" \
-    sh "$install_script"
+export DEBIAN_FRONTEND=noninteractive
 
-  rm -f "$install_script"
+swapoff -a || true
+sed -ri '/\sswap\s/s/^/#/' /etc/fstab || true
+
+cat >/etc/modules-load.d/k8s.conf <<'EOF'
+overlay
+br_netfilter
+EOF
+modprobe overlay || true
+modprobe br_netfilter || true
+
+cat >/etc/sysctl.d/99-k8s.conf <<'EOF'
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward = 1
+EOF
+sysctl --system >/dev/null || true
+
+apt-get update -qq
+apt-get install -y -qq apt-transport-https ca-certificates curl gpg containerd
+
+mkdir -p /etc/containerd
+containerd config default >/etc/containerd/config.toml
+sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml || true
+systemctl enable --now containerd
+systemctl restart containerd
+
+mkdir -p -m 755 /etc/apt/keyrings
+rm -f /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+curl -fsSL "https://pkgs.k8s.io/core:/stable:/${version_minor}/deb/Release.key" \
+  | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+cat >/etc/apt/sources.list.d/kubernetes.list <<EOF
+deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${version_minor}/deb/ /
+EOF
+apt-get update -qq
+apt-get install -y -qq kubelet kubeadm kubectl
+apt-mark hold kubelet kubeadm kubectl >/dev/null
+systemctl enable kubelet
+EOS
+}
+
+install_local_k8s() {
+  local node_name
+  local ignore_preflight
+  local -a init_args
+
+  configure_k8s_node_packages_local
+
+  if run_privileged test -f /etc/kubernetes/admin.conf && run_privileged kubectl --kubeconfig=/etc/kubernetes/admin.conf get --raw=/readyz >/dev/null 2>&1; then
+    return
+  fi
+
+  node_name="$(hostname)"
+  ignore_preflight="${HA_K8S_KUBEADM_IGNORE_PREFLIGHT:-NumCPU}"
+  init_args=(
+    kubeadm init
+    "--pod-network-cidr=${HA_K8S_POD_CIDR:-192.168.0.0/16}"
+    "--node-name=${node_name}"
+  )
+  if [[ -n "$ignore_preflight" ]]; then
+    init_args+=("--ignore-preflight-errors=${ignore_preflight}")
+  fi
+
+  run_privileged "${init_args[@]}"
+  configure_local_kubeconfig
+  kubectl apply -f "${HA_K8S_CNI_MANIFEST:-https://raw.githubusercontent.com/projectcalico/calico/v3.32.0/manifests/calico.yaml}"
+  kubectl taint nodes --all node-role.kubernetes.io/control-plane- >/dev/null 2>&1 || true
+  kubectl taint nodes --all node-role.kubernetes.io/master- >/dev/null 2>&1 || true
 }
 
 wait_local_kubernetes() {
@@ -2033,8 +2103,8 @@ run_local_provision() {
   if command -v kubectl >/dev/null 2>&1 && configure_local_kubeconfig && kubectl cluster-info >/dev/null 2>&1; then
     info "ok: local Kubernetes already exists"
   else
-    info "Provisioning local Kubernetes with k3s."
-    install_local_k3s
+    info "Provisioning local Kubernetes with kubeadm."
+    install_local_k8s
   fi
 
   wait_local_kubernetes
@@ -2042,7 +2112,7 @@ run_local_provision() {
 }
 
 lxd_container_name() {
-  printf '%s\n' "${HA_LXD_CONTAINER:-ha-k3s}"
+  printf '%s\n' "${HA_LXD_CONTAINER:-ha-k8s}"
 }
 
 lxd_container_ip() {
@@ -2097,41 +2167,82 @@ ensure_lxd_container() {
   lxc exec "$name" -- cloud-init status --wait >/dev/null 2>&1 || true
 }
 
-install_lxd_k3s() {
+install_lxd_k8s() {
   local name="$1"
-  local k3s_exec
+  local version_minor="${HA_K8S_VERSION_MINOR:-v1.36}"
+  local pod_cidr="${HA_K8S_POD_CIDR:-192.168.0.0/16}"
+  local cni_manifest="${HA_K8S_CNI_MANIFEST:-https://raw.githubusercontent.com/projectcalico/calico/v3.32.0/manifests/calico.yaml}"
+  local ignore_preflight="${HA_K8S_KUBEADM_IGNORE_PREFLIGHT:-NumCPU}"
 
-  k3s_exec="${HA_K3S_EXEC:-server --write-kubeconfig-mode 644 --disable traefik}"
-
-  if lxc exec "$name" -- sh -lc 'command -v k3s >/dev/null 2>&1'; then
-    return
-  fi
-
-  lxc exec "$name" -- sh -lc \
-    "curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL='${HA_K3S_CHANNEL:-stable}' INSTALL_K3S_EXEC='$k3s_exec' sh -"
-}
-
-patch_lxd_k3s_service() {
-  local name="$1"
-  local output
-
-  output="$(lxc exec "$name" -- bash -s <<'EOS'
+  lxc exec "$name" -- bash -s -- "$version_minor" "$pod_cidr" "$cni_manifest" "$ignore_preflight" <<'EOS'
 set -euo pipefail
-service=/etc/systemd/system/k3s.service
-[ -f "$service" ] || exit 0
-before="$(sha256sum "$service" | awk '{print $1}')"
-sed -i "/'--kubelet-arg'/{N;/'cgroups-per-qos=false'/d}" "$service"
-sed -i "/'--kubelet-arg'/{N;/'enforce-node-allocatable='/d}" "$service"
-after="$(sha256sum "$service" | awk '{print $1}')"
-if [[ "$before" != "$after" ]]; then
-  systemctl daemon-reload
-  printf '%s\n' changed
+version_minor="$1"
+pod_cidr="$2"
+cni_manifest="$3"
+ignore_preflight="$4"
+
+if [[ -f /etc/kubernetes/admin.conf ]] && kubectl --kubeconfig=/etc/kubernetes/admin.conf get --raw=/readyz >/dev/null 2>&1; then
+  exit 0
 fi
+
+export DEBIAN_FRONTEND=noninteractive
+
+swapoff -a || true
+sed -ri '/\sswap\s/s/^/#/' /etc/fstab || true
+
+cat >/etc/modules-load.d/k8s.conf <<'EOF'
+overlay
+br_netfilter
+EOF
+modprobe overlay || true
+modprobe br_netfilter || true
+
+cat >/etc/sysctl.d/99-k8s.conf <<'EOF'
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward = 1
+EOF
+sysctl --system >/dev/null || true
+
+apt-get update -qq
+apt-get install -y -qq apt-transport-https ca-certificates curl gpg containerd
+
+mkdir -p /etc/containerd
+containerd config default >/etc/containerd/config.toml
+sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml || true
+systemctl enable --now containerd
+systemctl restart containerd
+
+mkdir -p -m 755 /etc/apt/keyrings
+rm -f /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+curl -fsSL "https://pkgs.k8s.io/core:/stable:/${version_minor}/deb/Release.key" \
+  | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+cat >/etc/apt/sources.list.d/kubernetes.list <<EOF
+deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${version_minor}/deb/ /
+EOF
+apt-get update -qq
+apt-get install -y -qq kubelet kubeadm kubectl
+apt-mark hold kubelet kubeadm kubectl >/dev/null
+systemctl enable kubelet
+
+if [[ -f /etc/kubernetes/kubelet.conf && ! -f /etc/kubernetes/admin.conf ]]; then
+  kubeadm reset -f || true
+fi
+
+args=(kubeadm init "--pod-network-cidr=${pod_cidr}" --node-name "$HOSTNAME")
+if [[ -n "$ignore_preflight" ]]; then
+  args+=("--ignore-preflight-errors=${ignore_preflight}")
+fi
+"${args[@]}"
+
+mkdir -p /root/.kube
+cp /etc/kubernetes/admin.conf /root/.kube/config
+chmod 600 /root/.kube/config
+kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f "$cni_manifest"
+kubectl --kubeconfig=/etc/kubernetes/admin.conf taint nodes --all node-role.kubernetes.io/control-plane- >/dev/null 2>&1 || true
+kubectl --kubeconfig=/etc/kubernetes/admin.conf taint nodes --all node-role.kubernetes.io/master- >/dev/null 2>&1 || true
 EOS
-)"
-  if printf '%s\n' "$output" | grep -q '^changed$'; then
-    HA_LXD_K3S_RESTART_REQUIRED=1
-  fi
 }
 
 wait_lxd_kubernetes() {
@@ -2140,16 +2251,17 @@ wait_lxd_kubernetes() {
   local deadline=$((SECONDS + 240))
 
   while (( SECONDS < deadline )); do
-    count="$(lxc exec "$name" -- sh -lc 'kubectl get nodes --no-headers 2>/dev/null | wc -l' || printf '0')"
+    count="$(lxc exec "$name" -- sh -lc 'kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes --no-headers 2>/dev/null | wc -l' || printf '0')"
     if [[ "$count" -gt 0 ]]; then
-      lxc exec "$name" -- sh -lc 'kubectl wait --for=condition=Ready nodes --all --timeout=180s'
-      lxc exec "$name" -- sh -lc 'kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=180s'
+      lxc exec "$name" -- sh -lc 'kubectl --kubeconfig=/etc/kubernetes/admin.conf wait --for=condition=Ready nodes --all --timeout=180s'
+      lxc exec "$name" -- sh -lc 'kubectl --kubeconfig=/etc/kubernetes/admin.conf wait --for=condition=Ready pods --all -n kube-system --timeout=180s'
       return
     fi
     sleep 3
   done
 
-  lxc exec "$name" -- journalctl -u k3s --no-pager -n 120 || true
+  lxc exec "$name" -- journalctl -u kubelet --no-pager -n 120 || true
+  lxc exec "$name" -- journalctl -u containerd --no-pager -n 120 || true
   die "LXD Kubernetes did not become ready"
 }
 
@@ -2163,8 +2275,8 @@ configure_lxd_kubeconfig() {
 
   kubeconfig="$(local_kubeconfig_path)"
   mkdir -p "$(dirname "$kubeconfig")"
-  lxc file pull "${name}/etc/rancher/k3s/k3s.yaml" "$kubeconfig"
-  sed -i "s#https://127.0.0.1:6443#https://${ip}:6443#" "$kubeconfig"
+  lxc file pull "${name}/etc/kubernetes/admin.conf" "$kubeconfig"
+  sed -i "s#server: https://.*#server: https://${ip}:6443#" "$kubeconfig"
   chmod 600 "$kubeconfig"
   export KUBECONFIG="$kubeconfig"
 }
@@ -2194,14 +2306,8 @@ run_lxd_provision() {
 
   name="$(lxd_container_name)"
   info "Provisioning Kubernetes in LXD container: ${name}"
-  HA_LXD_K3S_RESTART_REQUIRED=0
   ensure_lxd_container "$name"
-  install_lxd_k3s "$name"
-  patch_lxd_k3s_service "$name"
-  if [[ "$HA_LXD_K3S_RESTART_REQUIRED" -eq 1 ]]; then
-    info "Restarting LXD k3s after service normalization."
-    lxc exec "$name" -- systemctl restart k3s
-  fi
+  install_lxd_k8s "$name"
   wait_lxd_kubernetes "$name"
   configure_lxd_kubeconfig "$name"
   write_lxd_handoff "$name"
@@ -2525,7 +2631,7 @@ EOF
 
 terraform_init_for_apply() {
   if [[ -n "${TF_BACKEND_CONFIG:-}" ]]; then
-    printf 'terraform {\n  backend "s3" {}\n}\n' >"${HA_OPENSTACK_DIR}/backend.generated.tf"
+    printf 'terraform {\n  backend "%s" {}\n}\n' "${TF_BACKEND_TYPE:-s3}" >"${HA_OPENSTACK_DIR}/backend.generated.tf"
     printf "%s" "$TF_BACKEND_CONFIG" >"${HA_OPENSTACK_DIR}/backend.hcl"
     terraform -chdir="$HA_OPENSTACK_DIR" init -reconfigure -backend-config=backend.hcl
   else
@@ -2590,7 +2696,7 @@ run_openstack_up() {
 
 run_openstack_kubernetes_bootstrap() {
   local auto_approve="$1"
-  local bootstrap_script="${HA_OPENSTACK_BOOTSTRAP_DIR}/bootstrap-k3s.sh"
+  local bootstrap_script="${HA_OPENSTACK_BOOTSTRAP_DIR}/bootstrap-k8s.sh"
 
   [[ "$auto_approve" -eq 1 ]] || die "ha up openstack-kubernetes bootstraps nodes over SSH; pass --auto-approve"
   [[ -x "$bootstrap_script" ]] || die "bootstrap script not executable: ${bootstrap_script#${HA_PROJECT_ROOT}/}"
@@ -2609,12 +2715,13 @@ run_kubernetes_up() {
       ;;
     lxd)
       [[ -f "$(local_kubeconfig_path)" ]] || run_lxd_provision 1
-      export KUBECONFIG="$(local_kubeconfig_path)"
+      KUBECONFIG="$(local_kubeconfig_path)"
+      export KUBECONFIG
       ;;
     *)
-      configure_kubeconfig_from_env || die "failed to decode PRIVATE_KUBECONFIG_B64"
+      configure_kubeconfig_from_env || die "failed to decode PRIVATE_CLOUD_KUBECONFIG_B64"
       if [[ "$HA_KUBECONFIG_DECODED" -eq 1 ]]; then
-        info "Decoded PRIVATE_KUBECONFIG_B64"
+        info "Decoded PRIVATE_CLOUD_KUBECONFIG_B64"
       fi
       [[ -n "${KUBECONFIG:-}" ]] || die "OpenStack kubeconfig not found; run ha up openstack-kubernetes --auto-approve or set KUBECONFIG"
       ;;
@@ -2705,7 +2812,7 @@ run_up() {
           ;;
         openstack)
           run_openstack_up "$auto_approve"
-          if [[ "${HA_OPENSTACK_BOOTSTRAP_K3S:-0}" == "1" ]]; then
+          if [[ "${HA_OPENSTACK_BOOTSTRAP_K8S:-0}" == "1" ]]; then
             run_openstack_kubernetes_bootstrap "$auto_approve"
             run_kubernetes_up kubernetes
             if [[ "${HA_APPLY_STORAGE:-0}" == "1" ]]; then
@@ -2715,7 +2822,7 @@ run_up() {
               run_kubernetes_up gpu
             fi
           else
-            info "OpenStack resources applied. Set HA_OPENSTACK_BOOTSTRAP_K3S=1 or run ha up openstack-kubernetes --auto-approve to bootstrap Kubernetes."
+            info "OpenStack resources applied. Set HA_OPENSTACK_BOOTSTRAP_K8S=1 or run ha up openstack-kubernetes --auto-approve to bootstrap Kubernetes."
           fi
           ;;
         *)
@@ -2817,7 +2924,8 @@ configure_prod_kubeconfig() {
   fi
 
   if [[ -f "$(local_kubeconfig_path)" ]]; then
-    export KUBECONFIG="$(local_kubeconfig_path)"
+    KUBECONFIG="$(local_kubeconfig_path)"
+    export KUBECONFIG
     return 0
   fi
 

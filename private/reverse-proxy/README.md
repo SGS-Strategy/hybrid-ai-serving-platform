@@ -3,8 +3,8 @@
 이 디렉터리는 물리 서버에 들어온 HTTP/HTTPS 요청을 Private Cloud 관리자 서비스로
 분기하는 Caddy 설정과 Cloudflare DNS 자동화 스크립트를 관리합니다.
 
-현재 Private Kubernetes는 k3s입니다. Caddy는 k3s를 대체하지 않고, 물리 서버 앞단의
-관리자 reverse proxy 역할만 맡습니다. k3s 내부에 Grafana, ArgoCD, Kubernetes Dashboard
+현재 Private Kubernetes는 kubeadm 기반 Kubernetes입니다. Caddy는 Kubernetes를 대체하지 않고, 물리 서버 앞단의
+관리자 reverse proxy 역할만 맡습니다. Kubernetes 내부에 Grafana, ArgoCD, Kubernetes Dashboard
 같은 서비스가 올라가면 Caddy upstream을 해당 서비스의 NodePort, port-forward, 또는
 내부 ingress 경로로 연결합니다.
 
