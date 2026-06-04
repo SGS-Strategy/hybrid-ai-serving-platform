@@ -1123,6 +1123,9 @@ jobs:
       - name: Setup kubectl
         uses: azure/setup-kubectl@v4
 
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
       - name: Download kubeconfig
         uses: actions/download-artifact@v4
         with:
@@ -1274,7 +1277,14 @@ jobs:
       - name: Install MinIO Operator
         run: |
           echo "Installing MinIO Operator..."
-          kubectl apply -f ../storage/minio-operator.yaml
+          kubectl create namespace minio-operator --dry-run=client -o yaml | kubectl apply -f -
+          helm upgrade --install minio-operator operator \
+            --repo https://operator.min.io/ \
+            --namespace minio-operator \
+            --version 7.1.1 \
+            --values ../storage/minio-operator-values.yaml \
+            --wait \
+            --timeout 10m
           for i in {1..60}; do
             if kubectl get crd tenants.minio.min.io >/dev/null 2>&1; then
               echo "MinIO Tenant CRD is ready"
@@ -1304,6 +1314,9 @@ jobs:
           done
           kubectl -n minio-operator rollout status deployment/minio-operator --timeout=600s
 
+          echo "Installing local-path provisioner..."
+          kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.36/deploy/local-path-storage.yaml
+          kubectl -n local-path-storage rollout status deployment/local-path-provisioner --timeout=600s
           for i in {1..30}; do
             if kubectl get storageclass local-path >/dev/null 2>&1; then
               echo "local-path storage class is ready"
@@ -1335,16 +1348,23 @@ jobs:
             --from-literal=accessKey="$minio_root_user" \
             --from-literal=secretKey="$minio_root_password" \
             --dry-run=client -o yaml | kubectl apply -f -
-          kubectl -n minio-tenant create secret generic model-admin \
-            --from-literal=CONSOLE_ACCESS_KEY="$minio_root_user" \
-            --from-literal=CONSOLE_SECRET_KEY="$minio_root_password" \
-            --dry-run=client -o yaml | kubectl apply -f -
           kubectl -n minio-tenant create secret generic minio-configuration \
             --from-literal=config.env="$minio_config_env" \
             --dry-run=client -o yaml | kubectl apply -f -
 
           echo "Installing MinIO tenant with volume size ${MINIO_VOLUME_SIZE}Gi..."
           sed -e "s/storage: 100Gi/storage: ${MINIO_VOLUME_SIZE}Gi/g" ../storage/minio-tenant.yaml | kubectl apply -f -
+          for i in {1..30}; do
+            if kubectl -n minio-tenant get service/minio >/dev/null 2>&1; then
+              kubectl -n minio-tenant patch service minio \
+                --type=merge \
+                -p '{"spec":{"publishNotReadyAddresses":true}}'
+              break
+            fi
+            echo "Waiting for MinIO service before endpoint bootstrap patch... ($i/30)"
+            sleep 5
+          done
+          kubectl -n minio-tenant get service/minio
           kubectl -n minio-tenant get tenant hybrid-ai
           echo "MinIO tenant applied"
 
@@ -1363,14 +1383,41 @@ jobs:
             sleep 10
           done
           kubectl get pods -n minio-tenant -l v1.min.io/tenant=hybrid-ai
-          kubectl wait --for=condition=Ready pod -l v1.min.io/tenant=hybrid-ai -n minio-tenant --timeout=600s
+          for i in {1..60}; do
+            state="$(kubectl -n minio-tenant get tenant hybrid-ai -o jsonpath='{.status.currentState}' 2>/dev/null || true)"
+            health="$(kubectl -n minio-tenant get tenant hybrid-ai -o jsonpath='{.status.healthStatus}' 2>/dev/null || true)"
+            not_ready_minio_containers="$(
+              kubectl -n minio-tenant get pods -l v1.min.io/tenant=hybrid-ai \
+                -o jsonpath='{range .items[*]}{range .status.containerStatuses[?(@.name=="minio")]}{.ready}{"\n"}{end}{end}' \
+                | grep -vc '^true$' || true
+            )"
+            if [[ "$state" == "Initialized" && "$health" == "green" && "${not_ready_minio_containers:-1}" -eq 0 ]]; then
+              echo "MinIO tenant is initialized and MinIO containers are ready"
+              break
+            fi
+            echo "Waiting for MinIO tenant initialization: state=${state:-unknown}, health=${health:-unknown}, not_ready_minio_containers=${not_ready_minio_containers:-unknown} ($i/60)"
+            sleep 10
+          done
+          state="$(kubectl -n minio-tenant get tenant hybrid-ai -o jsonpath='{.status.currentState}')"
+          health="$(kubectl -n minio-tenant get tenant hybrid-ai -o jsonpath='{.status.healthStatus}')"
+          [[ "$state" == "Initialized" && "$health" == "green" ]]
           kubectl get pods -n minio-tenant -o wide
+          kubectl -n minio-tenant get tenant hybrid-ai
           echo "MinIO tenant is ready"
 
       - name: Install NFS Provisioner
         run: |
           echo "Installing NFS provisioner with server ${{ steps.storage.outputs.NFS_SERVER_IP }}..."
-          sed -e "s/server: 192.168.100.1/server: ${{ steps.storage.outputs.NFS_SERVER_IP }}/g" ../storage/nfs-provisioner.yaml | kubectl apply -f -
+          sed -e "s/server: 192.168.100.1/server: ${{ steps.storage.outputs.NFS_SERVER_IP }}/g" \
+            ../storage/nfs-provisioner-values.yaml > /tmp/nfs-provisioner-values.yaml
+          helm upgrade --install nfs-subdir-external-provisioner nfs-subdir-external-provisioner \
+            --repo https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner/ \
+            --namespace nfs-provisioner \
+            --create-namespace \
+            --version 4.0.18 \
+            --values /tmp/nfs-provisioner-values.yaml \
+            --wait \
+            --timeout 10m
           for i in {1..60}; do
             if kubectl get storageclass private-nfs-rwx >/dev/null 2>&1; then
               echo "NFS storage class is ready"
