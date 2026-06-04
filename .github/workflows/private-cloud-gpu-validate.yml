@@ -87,7 +87,7 @@ jobs:
 
           password_file="/tmp/${GPU_VALIDATION_RESOURCE_PREFIX}.tenant-password"
           printf '%s' "${OS_PASSWORD}" \
-            | lxc exec ha-openstack -- bash -lc "umask 077 && cat > '${password_file}'"
+            | lxc exec ha-openstack -- sudo -u stack -H bash -lc "umask 077 && cat > '${password_file}'"
 
           lxc exec ha-openstack -- sudo -u stack -H bash -s -- \
             "${OS_USERNAME}" \
