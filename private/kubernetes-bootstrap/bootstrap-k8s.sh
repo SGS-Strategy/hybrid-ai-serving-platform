@@ -261,6 +261,55 @@ version_minor="$1"
 
 export DEBIAN_FRONTEND=noninteractive
 
+wait_for_apt_locks() {
+  local lock
+  local busy
+  local deadline=$((SECONDS + 600))
+  local -a locks=(
+    /var/lib/dpkg/lock
+    /var/lib/dpkg/lock-frontend
+    /var/lib/apt/lists/lock
+    /var/cache/apt/archives/lock
+  )
+
+  while true; do
+    busy=0
+    if command -v fuser >/dev/null 2>&1; then
+      for lock in "${locks[@]}"; do
+        if fuser "$lock" >/dev/null 2>&1; then
+          busy=1
+          break
+        fi
+      done
+    elif pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgrade >/dev/null 2>&1; then
+      busy=1
+    fi
+
+    [[ "$busy" -eq 0 ]] && return
+    if (( SECONDS >= deadline )); then
+      echo "Timed out waiting for apt/dpkg locks" >&2
+      if command -v fuser >/dev/null 2>&1; then
+        for lock in "${locks[@]}"; do
+          fuser -v "$lock" >&2 || true
+        done
+      fi
+      ps -eo pid,comm,args | grep -E 'apt|dpkg|unattended-upgrade' >&2 || true
+      return 1
+    fi
+    echo "Waiting for apt/dpkg lock to be released..."
+    sleep 5
+  done
+}
+
+apt_get() {
+  wait_for_apt_locks
+  apt-get -o DPkg::Lock::Timeout=600 "$@"
+}
+
+if command -v cloud-init >/dev/null 2>&1; then
+  cloud-init status --wait >/dev/null 2>&1 || true
+fi
+
 swapoff -a || true
 sed -ri '/\sswap\s/s/^/#/' /etc/fstab || true
 
@@ -278,8 +327,8 @@ net.ipv4.ip_forward = 1
 EOF
 sysctl --system >/dev/null || true
 
-apt-get update -qq
-apt-get install -y -qq apt-transport-https ca-certificates curl gpg containerd
+apt_get update -qq
+apt_get install -y -qq apt-transport-https ca-certificates curl gpg containerd
 
 mkdir -p /etc/containerd
 containerd config default >/etc/containerd/config.toml
@@ -295,8 +344,9 @@ chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 cat >/etc/apt/sources.list.d/kubernetes.list <<EOF
 deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${version_minor}/deb/ /
 EOF
-apt-get update -qq
-apt-get install -y -qq kubelet kubeadm kubectl
+apt_get update -qq
+apt_get install -y -qq kubelet kubeadm kubectl
+wait_for_apt_locks
 apt-mark hold kubelet kubeadm kubectl >/dev/null
 systemctl enable kubelet
 REMOTE

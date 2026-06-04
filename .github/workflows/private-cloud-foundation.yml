@@ -211,17 +211,63 @@ jobs:
         if: steps.check_devstack.outputs.devstack_running == 'false' || steps.force_cleanup_devstack.outputs.ran == 'true'
         run: |
           echo "Installing prerequisites..."
-          lxc exec ha-openstack -- bash -c '
-            export DEBIAN_FRONTEND=noninteractive
-            apt-get update -qq
-            apt-get install -y -qq git sudo curl ca-certificates iproute2 net-tools kmod openssh-client netcat-openbsd python3-openstackclient
-            id stack &>/dev/null || useradd -s /bin/bash -d /opt/stack -m stack
-            chmod +x /opt/stack
-            echo "stack ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/stack
-            chmod 440 /etc/sudoers.d/stack
-            chown -R stack:stack /opt/stack
-            echo "Prerequisites installed"
-          '
+          lxc exec ha-openstack -- bash -s <<'INSTALL_DEVSTACK_PREREQS'
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+
+          wait_for_apt_locks() {
+            local lock
+            local busy
+            local deadline=$((SECONDS + 600))
+            local -a locks=(
+              /var/lib/dpkg/lock
+              /var/lib/dpkg/lock-frontend
+              /var/lib/apt/lists/lock
+              /var/cache/apt/archives/lock
+            )
+
+            while true; do
+              busy=0
+              if command -v fuser >/dev/null 2>&1; then
+                for lock in "${locks[@]}"; do
+                  if fuser "$lock" >/dev/null 2>&1; then
+                    busy=1
+                    break
+                  fi
+                done
+              elif pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgrade >/dev/null 2>&1; then
+                busy=1
+              fi
+
+              [[ "$busy" -eq 0 ]] && return
+              if (( SECONDS >= deadline )); then
+                echo "Timed out waiting for apt/dpkg locks" >&2
+                ps -eo pid,comm,args | grep -E 'apt|dpkg|unattended-upgrade' >&2 || true
+                return 1
+              fi
+              echo "Waiting for apt/dpkg lock to be released..."
+              sleep 5
+            done
+          }
+
+          apt_get() {
+            wait_for_apt_locks
+            apt-get -o DPkg::Lock::Timeout=600 "$@"
+          }
+
+          if command -v cloud-init >/dev/null 2>&1; then
+            cloud-init status --wait >/dev/null 2>&1 || true
+          fi
+
+          apt_get update -qq
+          apt_get install -y -qq git sudo curl ca-certificates iproute2 net-tools kmod openssh-client netcat-openbsd python3-openstackclient
+          id stack &>/dev/null || useradd -s /bin/bash -d /opt/stack -m stack
+          chmod +x /opt/stack
+          echo "stack ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/stack
+          chmod 440 /etc/sudoers.d/stack
+          chown -R stack:stack /opt/stack
+          echo "Prerequisites installed"
+          INSTALL_DEVSTACK_PREREQS
 
       - name: Clone DevStack
         if: steps.check_devstack.outputs.devstack_running == 'false' || steps.force_cleanup_devstack.outputs.ran == 'true'
@@ -282,9 +328,9 @@ jobs:
 
       - name: Run DevStack
         if: steps.check_devstack.outputs.devstack_running == 'false' || steps.force_cleanup_devstack.outputs.ran == 'true'
-        timeout-minutes: 90
+        timeout-minutes: 180
         run: |
-          echo "Starting DevStack installation (this takes 30-60 minutes)..."
+          echo "Starting DevStack installation (this can take 30-90 minutes on nested LXD)..."
           lxc exec ha-openstack -- sudo -u stack -H bash -s <<'RUN_DEVSTACK'
           set -euo pipefail
           cd /opt/stack/devstack
@@ -293,6 +339,23 @@ jobs:
           ./stack.sh < /dev/null
           RUN_DEVSTACK
           echo "DevStack installation complete"
+
+      - name: Dump DevStack diagnostics
+        if: failure() && (steps.check_devstack.outputs.devstack_running == 'false' || steps.force_cleanup_devstack.outputs.ran == 'true')
+        run: |
+          echo "::group::DevStack stack.sh.log"
+          lxc exec ha-openstack -- bash -lc 'tail -n 240 /opt/stack/logs/stack.sh.log 2>/dev/null || true'
+          echo "::endgroup::"
+
+          echo "::group::DevStack systemd units"
+          lxc exec ha-openstack -- bash -lc 'systemctl --no-pager --failed || true'
+          lxc exec ha-openstack -- bash -lc 'systemctl --no-pager --type=service "devstack@*" || true'
+          echo "::endgroup::"
+
+          echo "::group::Nova service journals"
+          # shellcheck disable=SC2016
+          lxc exec ha-openstack -- bash -lc 'for unit in devstack@n-api.service devstack@n-api-meta.service devstack@n-cpu.service devstack@n-cond.service devstack@n-sch.service devstack@n-novnc-cell1.service; do echo "### ${unit}"; journalctl -u "${unit}" --no-pager -n 120 2>/dev/null || true; done'
+          echo "::endgroup::"
 
       - name: Configure Horizon proxy settings
         run: |
@@ -399,12 +462,53 @@ jobs:
           lxc exec ha-openstack -- bash -s <<'ENSURE_PROXY_TOOLS'
           set -euo pipefail
           export DEBIAN_FRONTEND=noninteractive
+
+          wait_for_apt_locks() {
+            local lock
+            local busy
+            local deadline=$((SECONDS + 600))
+            local -a locks=(
+              /var/lib/dpkg/lock
+              /var/lib/dpkg/lock-frontend
+              /var/lib/apt/lists/lock
+              /var/cache/apt/archives/lock
+            )
+
+            while true; do
+              busy=0
+              if command -v fuser >/dev/null 2>&1; then
+                for lock in "${locks[@]}"; do
+                  if fuser "$lock" >/dev/null 2>&1; then
+                    busy=1
+                    break
+                  fi
+                done
+              elif pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgrade >/dev/null 2>&1; then
+                busy=1
+              fi
+
+              [[ "$busy" -eq 0 ]] && return
+              if (( SECONDS >= deadline )); then
+                echo "Timed out waiting for apt/dpkg locks" >&2
+                ps -eo pid,comm,args | grep -E 'apt|dpkg|unattended-upgrade' >&2 || true
+                return 1
+              fi
+              echo "Waiting for apt/dpkg lock to be released..."
+              sleep 5
+            done
+          }
+
+          apt_get() {
+            wait_for_apt_locks
+            apt-get -o DPkg::Lock::Timeout=600 "$@"
+          }
+
           missing=0
           command -v nc >/dev/null 2>&1 || missing=1
           command -v ssh >/dev/null 2>&1 || missing=1
           if [[ "$missing" -eq 1 ]]; then
-            apt-get update -qq
-            apt-get install -y -qq netcat-openbsd openssh-client
+            apt_get update -qq
+            apt_get install -y -qq netcat-openbsd openssh-client
           fi
           ENSURE_PROXY_TOOLS
 
@@ -1110,9 +1214,50 @@ jobs:
           set -euo pipefail
           cidr="$1"
           export DEBIAN_FRONTEND=noninteractive
+
+          wait_for_apt_locks() {
+            local lock
+            local busy
+            local deadline=$((SECONDS + 600))
+            local -a locks=(
+              /var/lib/dpkg/lock
+              /var/lib/dpkg/lock-frontend
+              /var/lib/apt/lists/lock
+              /var/cache/apt/archives/lock
+            )
+
+            while true; do
+              busy=0
+              if command -v fuser >/dev/null 2>&1; then
+                for lock in "${locks[@]}"; do
+                  if sudo fuser "$lock" >/dev/null 2>&1; then
+                    busy=1
+                    break
+                  fi
+                done
+              elif pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgrade >/dev/null 2>&1; then
+                busy=1
+              fi
+
+              [[ "$busy" -eq 0 ]] && return
+              if (( SECONDS >= deadline )); then
+                echo "Timed out waiting for apt/dpkg locks" >&2
+                ps -eo pid,comm,args | grep -E 'apt|dpkg|unattended-upgrade' >&2 || true
+                return 1
+              fi
+              echo "Waiting for apt/dpkg lock to be released..."
+              sleep 5
+            done
+          }
+
+          apt_get() {
+            wait_for_apt_locks
+            sudo apt-get -o DPkg::Lock::Timeout=600 "$@"
+          }
+
           if ! sudo test -x /usr/sbin/exportfs; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq nfs-common nfs-kernel-server
+            apt_get update -qq
+            apt_get install -y -qq nfs-common nfs-kernel-server
           fi
           sudo mkdir -p /mnt/nfs/hybrid-ai
           sudo chown nobody:nogroup /mnt/nfs/hybrid-ai
