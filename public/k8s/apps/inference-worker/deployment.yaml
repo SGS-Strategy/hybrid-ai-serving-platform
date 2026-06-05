@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: inference-worker
-  namespace: hasp
+  namespace: inference
 spec:
   replicas: 1
   selector:
@@ -13,14 +13,21 @@ spec:
       labels:
         app: inference-worker
     spec:
+      serviceAccountName: inference-worker
+      nodeSelector:
+        workload: inference
       containers:
         - name: inference-worker
           image: 808379768010.dkr.ecr.ap-northeast-2.amazonaws.com/inference-worker:latest
           env:
             - name: AWS_REGION
               value: ap-northeast-2
+            # 실제 주소는 배포 워크플로우가 MSK에서 읽어 inference-config ConfigMap에 주입함
             - name: BOOTSTRAP_SERVERS
-              value: replace-me:9092
+              valueFrom:
+                configMapKeyRef:
+                  name: inference-config
+                  key: BOOTSTRAP_SERVERS
             - name: REQUEST_TOPIC
               value: inference-request
             - name: RETRY_TOPIC
