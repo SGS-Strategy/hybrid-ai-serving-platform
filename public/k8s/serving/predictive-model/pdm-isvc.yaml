@@ -14,6 +14,8 @@ metadata:
     serving.kserve.io/deploymentMode: RawDeployment
 spec:
   predictor:
+    nodeSelector:
+      workload: inference
     minReplicas: 1
     maxReplicas: 3
     containers:
