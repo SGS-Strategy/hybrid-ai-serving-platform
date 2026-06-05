@@ -23,10 +23,6 @@ on:
         description: Setup MinIO and NFS storage
         required: true
         type: boolean
-      validate_gpu:
-        description: Validate GPU passthrough and run tests
-        required: true
-        type: boolean
       minio_volume_size:
         description: MinIO volume size per disk (Gi)
         required: true
@@ -457,6 +453,89 @@ jobs:
           done
           ENSURE_IMAGE
 
+      - name: Ensure configured OpenStack project and user
+        run: |
+          if [[ -z "${OS_USERNAME:-}" || -z "${OS_PASSWORD:-}" || -z "${OS_PROJECT_NAME:-}" ]]; then
+            echo "::error::OPENSTACK_USERNAME, OPENSTACK_PASSWORD, and OPENSTACK_PROJECT_NAME are required"
+            exit 1
+          fi
+
+          printf '%s' "${OS_PASSWORD}" \
+            | lxc exec ha-openstack -- sudo -u stack -H bash -c 'umask 077 && cat > /opt/stack/devstack/.configured-openstack-password'
+
+          lxc exec ha-openstack -- sudo -u stack -H bash -s -- \
+            "${OS_USERNAME}" \
+            "${OS_PROJECT_NAME}" \
+            "${OS_USER_DOMAIN_NAME:-Default}" \
+            "${OS_PROJECT_DOMAIN_NAME:-Default}" <<'ENSURE_OPENSTACK_TENANT'
+          set -euo pipefail
+          cd /opt/stack/devstack
+          set +u
+          source openrc admin admin >/dev/null
+          set -u
+
+          user_name="$1"
+          project_name="$2"
+          user_domain="$3"
+          project_domain="$4"
+          password_file=/opt/stack/devstack/.configured-openstack-password
+          trap 'rm -f "$password_file"' EXIT
+          password="$(cat "$password_file")"
+
+          openstack domain show "$user_domain" >/dev/null
+          openstack domain show "$project_domain" >/dev/null
+
+          openstack project create \
+            --domain "$project_domain" \
+            --description "Hybrid AI private cloud project managed by GitHub Actions" \
+            --or-show \
+            "$project_name" >/dev/null
+
+          if openstack user show --domain "$user_domain" "$user_name" >/dev/null 2>&1; then
+            openstack user set \
+              --domain "$user_domain" \
+              --project "$project_name" \
+              --project-domain "$project_domain" \
+              --password "$password" \
+              --enable \
+              "$user_name"
+          else
+            openstack user create \
+              --domain "$user_domain" \
+              --project "$project_name" \
+              --project-domain "$project_domain" \
+              --password "$password" \
+              --enable \
+              "$user_name" >/dev/null
+          fi
+
+          openstack role add member \
+            --user "$user_name" \
+            --user-domain "$user_domain" \
+            --project "$project_name" \
+            --project-domain "$project_domain"
+
+          openstack quota set \
+            --instances 10 \
+            --cores 20 \
+            --ram 51200 \
+            --key-pairs 100 \
+            --floating-ips -1 \
+            --secgroups -1 \
+            --secgroup-rules -1 \
+            --networks 20 \
+            --subnets 20 \
+            --ports 200 \
+            --routers 20 \
+            "$project_name" || true
+
+          if openstack network show public >/dev/null 2>&1; then
+            openstack network set --share public || true
+          fi
+
+          echo "ok: ensured OpenStack project '$project_name' and user '$user_name'"
+          ENSURE_OPENSTACK_TENANT
+
       - name: Ensure DevStack SSH proxy tools
         run: |
           lxc exec ha-openstack -- bash -s <<'ENSURE_PROXY_TOOLS'
@@ -628,21 +707,8 @@ jobs:
 
       - name: Prepare OpenStack environment
         run: |
-          write_env() {
-            {
-              printf '%s<<__EOF__\n' "$1"
-              printf '%s\n' "$2"
-              printf '__EOF__\n'
-            } >> "$GITHUB_ENV"
-          }
-
           if [[ "${INSTALL_OPENSTACK}" == "true" ]]; then
-            write_env OS_AUTH_URL "http://127.0.0.1:18081/identity/v3"
-            write_env OS_USERNAME "admin"
-            write_env OS_PROJECT_NAME "admin"
-            write_env OS_USER_DOMAIN_NAME "Default"
-            write_env OS_PROJECT_DOMAIN_NAME "Default"
-            write_env OS_REGION_NAME "RegionOne"
+            echo "Using GitHub-configured OpenStack credentials for local DevStack tenant login"
           fi
 
       - name: Validate required configuration
@@ -1123,6 +1189,9 @@ jobs:
       - name: Setup kubectl
         uses: azure/setup-kubectl@v4
 
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
       - name: Download kubeconfig
         uses: actions/download-artifact@v4
         with:
@@ -1274,7 +1343,14 @@ jobs:
       - name: Install MinIO Operator
         run: |
           echo "Installing MinIO Operator..."
-          kubectl apply -f ../storage/minio-operator.yaml
+          kubectl create namespace minio-operator --dry-run=client -o yaml | kubectl apply -f -
+          helm upgrade --install minio-operator operator \
+            --repo https://operator.min.io/ \
+            --namespace minio-operator \
+            --version 7.1.1 \
+            --values ../storage/minio-operator-values.yaml \
+            --wait \
+            --timeout 10m
           for i in {1..60}; do
             if kubectl get crd tenants.minio.min.io >/dev/null 2>&1; then
               echo "MinIO Tenant CRD is ready"
@@ -1304,6 +1380,9 @@ jobs:
           done
           kubectl -n minio-operator rollout status deployment/minio-operator --timeout=600s
 
+          echo "Installing local-path provisioner..."
+          kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.36/deploy/local-path-storage.yaml
+          kubectl -n local-path-storage rollout status deployment/local-path-provisioner --timeout=600s
           for i in {1..30}; do
             if kubectl get storageclass local-path >/dev/null 2>&1; then
               echo "local-path storage class is ready"
@@ -1335,16 +1414,23 @@ jobs:
             --from-literal=accessKey="$minio_root_user" \
             --from-literal=secretKey="$minio_root_password" \
             --dry-run=client -o yaml | kubectl apply -f -
-          kubectl -n minio-tenant create secret generic model-admin \
-            --from-literal=CONSOLE_ACCESS_KEY="$minio_root_user" \
-            --from-literal=CONSOLE_SECRET_KEY="$minio_root_password" \
-            --dry-run=client -o yaml | kubectl apply -f -
           kubectl -n minio-tenant create secret generic minio-configuration \
             --from-literal=config.env="$minio_config_env" \
             --dry-run=client -o yaml | kubectl apply -f -
 
           echo "Installing MinIO tenant with volume size ${MINIO_VOLUME_SIZE}Gi..."
           sed -e "s/storage: 100Gi/storage: ${MINIO_VOLUME_SIZE}Gi/g" ../storage/minio-tenant.yaml | kubectl apply -f -
+          for i in {1..30}; do
+            if kubectl -n minio-tenant get service/minio >/dev/null 2>&1; then
+              kubectl -n minio-tenant patch service minio \
+                --type=merge \
+                -p '{"spec":{"publishNotReadyAddresses":true}}'
+              break
+            fi
+            echo "Waiting for MinIO service before endpoint bootstrap patch... ($i/30)"
+            sleep 5
+          done
+          kubectl -n minio-tenant get service/minio
           kubectl -n minio-tenant get tenant hybrid-ai
           echo "MinIO tenant applied"
 
@@ -1363,14 +1449,41 @@ jobs:
             sleep 10
           done
           kubectl get pods -n minio-tenant -l v1.min.io/tenant=hybrid-ai
-          kubectl wait --for=condition=Ready pod -l v1.min.io/tenant=hybrid-ai -n minio-tenant --timeout=600s
+          for i in {1..60}; do
+            state="$(kubectl -n minio-tenant get tenant hybrid-ai -o jsonpath='{.status.currentState}' 2>/dev/null || true)"
+            health="$(kubectl -n minio-tenant get tenant hybrid-ai -o jsonpath='{.status.healthStatus}' 2>/dev/null || true)"
+            not_ready_minio_containers="$(
+              kubectl -n minio-tenant get pods -l v1.min.io/tenant=hybrid-ai \
+                -o jsonpath='{range .items[*]}{range .status.containerStatuses[?(@.name=="minio")]}{.ready}{"\n"}{end}{end}' \
+                | grep -vc '^true$' || true
+            )"
+            if [[ "$state" == "Initialized" && "$health" == "green" && "${not_ready_minio_containers:-1}" -eq 0 ]]; then
+              echo "MinIO tenant is initialized and MinIO containers are ready"
+              break
+            fi
+            echo "Waiting for MinIO tenant initialization: state=${state:-unknown}, health=${health:-unknown}, not_ready_minio_containers=${not_ready_minio_containers:-unknown} ($i/60)"
+            sleep 10
+          done
+          state="$(kubectl -n minio-tenant get tenant hybrid-ai -o jsonpath='{.status.currentState}')"
+          health="$(kubectl -n minio-tenant get tenant hybrid-ai -o jsonpath='{.status.healthStatus}')"
+          [[ "$state" == "Initialized" && "$health" == "green" ]]
           kubectl get pods -n minio-tenant -o wide
+          kubectl -n minio-tenant get tenant hybrid-ai
           echo "MinIO tenant is ready"
 
       - name: Install NFS Provisioner
         run: |
           echo "Installing NFS provisioner with server ${{ steps.storage.outputs.NFS_SERVER_IP }}..."
-          sed -e "s/server: 192.168.100.1/server: ${{ steps.storage.outputs.NFS_SERVER_IP }}/g" ../storage/nfs-provisioner.yaml | kubectl apply -f -
+          sed -e "s/server: 192.168.100.1/server: ${{ steps.storage.outputs.NFS_SERVER_IP }}/g" \
+            ../storage/nfs-provisioner-values.yaml > /tmp/nfs-provisioner-values.yaml
+          helm upgrade --install nfs-subdir-external-provisioner nfs-subdir-external-provisioner \
+            --repo https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner/ \
+            --namespace nfs-provisioner \
+            --create-namespace \
+            --version 4.0.18 \
+            --values /tmp/nfs-provisioner-values.yaml \
+            --wait \
+            --timeout 10m
           for i in {1..60}; do
             if kubectl get storageclass private-nfs-rwx >/dev/null 2>&1; then
               echo "NFS storage class is ready"
@@ -1424,146 +1537,3 @@ jobs:
         run: |
           pgrep -f "ssh .*127.0.0.1:${HA_KUBECTL_TUNNEL_PORT}:127.0.0.1:6443" | xargs -r kill || true
           rm -f "$HA_OPENSTACK_SSH_KEY" "$HA_OPENSTACK_SSH_CONFIG" "$KUBECONFIG"
-
-  validate-gpu:
-    name: Validate GPU Passthrough
-    runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER }}
-    needs: [bootstrap-k8s, setup-storage]
-    if: ${{ always() && needs.bootstrap-k8s.result == 'success' && (!inputs.setup_storage || needs.setup-storage.result == 'success') && inputs.action == 'apply' && inputs.bootstrap_kubernetes && inputs.validate_gpu }}
-    defaults:
-      run:
-        working-directory: .
-    env:
-      KUBECONFIG: ${{ github.workspace }}/.ha/openstack/kubeconfig
-      HA_OPENSTACK_SSH_USER: ${{ vars.PRIVATE_CLOUD_SSH_USER }}
-      HA_OPENSTACK_SSH_KEY: /tmp/private-cloud-gpu-ssh
-      HA_OPENSTACK_SSH_CONFIG: ${{ github.workspace }}/.ha/openstack/gpu_ssh_config
-      HA_KUBECTL_TUNNEL_PORT: "16443"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Check GPU validation tools
-        run: |
-          missing=0
-          for tool in python3; do
-            if ! command -v "$tool" >/dev/null 2>&1; then
-              echo "::error::Missing required runner tool: ${tool}"
-              missing=1
-            fi
-          done
-          if [[ "${INSTALL_OPENSTACK}" == "true" ]]; then
-            for tool in ssh lxc; do
-              if ! command -v "$tool" >/dev/null 2>&1; then
-                echo "::error::Missing required runner tool for local DevStack kubectl tunnel: ${tool}"
-                missing=1
-              fi
-            done
-          fi
-          exit "${missing}"
-
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
-
-      - name: Download kubeconfig
-        uses: actions/download-artifact@v4
-        with:
-          name: kubeconfig
-          path: .ha/openstack
-
-      - name: Download Terraform outputs
-        if: ${{ env.INSTALL_OPENSTACK == 'true' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: terraform-output
-          path: .ha/openstack
-
-      - name: Start kubectl SSH tunnel
-        if: ${{ env.INSTALL_OPENSTACK == 'true' }}
-        run: |
-          if [[ -z "${PRIVATE_CLOUD_SSH_PRIVATE_KEY:-}" ]]; then
-            echo "::error::Missing required secret: PRIVATE_CLOUD_SSH_PRIVATE_KEY"
-            exit 1
-          fi
-          FIRST_CP_IP=$(python3 - <<'PY'
-          import json
-          with open('.ha/openstack/terraform-output.json', 'r') as f:
-              data = json.load(f)
-          nodes = data.get('control_plane_nodes', {}).get('value', [])
-          if nodes:
-              print(nodes[0].get('floating_ip') or nodes[0].get('private_ip'))
-          PY
-          )
-          if [[ -z "$FIRST_CP_IP" ]]; then
-            echo "::error::Terraform output did not contain a control-plane IP"
-            exit 1
-          fi
-          mkdir -p "$(dirname "$HA_OPENSTACK_SSH_KEY")" "$(dirname "$HA_OPENSTACK_SSH_CONFIG")"
-          printf '%s\n' "${PRIVATE_CLOUD_SSH_PRIVATE_KEY}" > "$HA_OPENSTACK_SSH_KEY"
-          chmod 600 "$HA_OPENSTACK_SSH_KEY"
-          {
-            printf 'Host *\n'
-            printf '  User %s\n' "$HA_OPENSTACK_SSH_USER"
-            printf '  IdentityFile %s\n' "$HA_OPENSTACK_SSH_KEY"
-            printf '  BatchMode yes\n'
-            printf '  StrictHostKeyChecking no\n'
-            printf '  CheckHostIP no\n'
-            printf '  UserKnownHostsFile /dev/null\n'
-            printf '  LogLevel ERROR\n'
-            printf '  ProxyCommand lxc exec ha-openstack -- nc %%h %%p\n'
-          } > "$HA_OPENSTACK_SSH_CONFIG"
-          chmod 600 "$HA_OPENSTACK_SSH_CONFIG"
-          pgrep -f "ssh .*127.0.0.1:${HA_KUBECTL_TUNNEL_PORT}:127.0.0.1:6443" | xargs -r kill || true
-          ssh -F "$HA_OPENSTACK_SSH_CONFIG" \
-            -fN \
-            -L "127.0.0.1:${HA_KUBECTL_TUNNEL_PORT}:127.0.0.1:6443" \
-            "$FIRST_CP_IP"
-          echo "kubectl tunnel started on 127.0.0.1:${HA_KUBECTL_TUNNEL_PORT}"
-
-      - name: Install NVIDIA runtime resources
-        run: |
-          echo "Installing NVIDIA RuntimeClass and device plugin..."
-          kubectl apply -f private/gpu-worker/runtimeclass.yaml
-          kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.5/nvidia-device-plugin.yml
-          echo "NVIDIA runtime resources installed"
-
-      - name: Wait for GPU nodes
-        timeout-minutes: 5
-        run: |
-          echo "Waiting for GPU nodes to be ready..."
-          kubectl wait --for=condition=Ready node -l hybrid-ai.io/accelerator=nvidia --timeout=300s
-          echo "GPU nodes:"
-          kubectl get nodes -l hybrid-ai.io/accelerator=nvidia -o wide
-
-      - name: Run GPU validation tests
-        run: |
-          echo "Running GPU validation jobs..."
-          kubectl delete job/gpu-validation -n kube-system --ignore-not-found=true
-          kubectl delete job/gpu-tensorflow-test -n default --ignore-not-found=true
-          kubectl apply -f private/gpu-worker/gpu-validation-job.yaml
-
-          echo "Waiting for nvidia-smi job..."
-          kubectl wait --for=condition=Complete job/gpu-validation -n kube-system --timeout=300s
-          kubectl logs job/gpu-validation -n kube-system
-
-          echo "Waiting for TensorFlow GPU test..."
-          kubectl wait --for=condition=Complete job/gpu-tensorflow-test --timeout=600s
-          kubectl logs job/gpu-tensorflow-test
-
-          echo "GPU validation complete!"
-
-      - name: Run MinIO connectivity test
-        if: ${{ inputs.setup_storage }}
-        run: |
-          echo "Testing MinIO connectivity..."
-          kubectl delete job/dataset-minio-test --ignore-not-found=true
-          kubectl apply -f private/gpu-worker/minio-validation-job.yaml
-          kubectl wait --for=condition=Complete job/dataset-minio-test --timeout=120s
-          kubectl logs job/dataset-minio-test
-          echo "MinIO validation complete!"
-
-      - name: Cleanup GPU validation sensitive files
-        if: always()
-        run: |
-          pgrep -f "ssh .*127.0.0.1:${HA_KUBECTL_TUNNEL_PORT}:127.0.0.1:6443" | xargs -r kill || true
-          rm -f "$HA_OPENSTACK_SSH_KEY" "$HA_OPENSTACK_SSH_CONFIG"

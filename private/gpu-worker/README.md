@@ -21,7 +21,7 @@ kubectl apply -k private/gpu-worker
 - NVIDIA device plugin은 Helm 또는 GitOps로 설치합니다. Host dependency와 container toolkit은 cloud-init에서 먼저 준비됩니다.
 - `nvidia-device-plugin-values.example.yaml`은 실제 값이 아닌 출발점입니다.
 
-적용 후 `nvidia-smi-validation` Job으로 GPU runtime 연결 여부를 확인합니다.
+적용 후 `gpu-validation` Job으로 GPU runtime 연결 여부를 확인합니다.
 
 노드 내부에서 host dependency를 확인할 때:
 

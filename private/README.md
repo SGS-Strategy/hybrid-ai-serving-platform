@@ -24,7 +24,7 @@ private/
 3. `bootstrap_kubernetes=true`이면 Terraform output node inventory 기준으로 kubeadm 기반 Kubernetes bootstrap을 진행합니다.
 4. `apply_kubernetes=true`이면 namespace, quota, RBAC, network policy baseline을 적용합니다.
 5. DNS는 foundation 생명주기와 같이 움직입니다. Plan은 dry-run, Apply는 Cloudflare upsert, Destroy는 Cloudflare delete를 실행합니다.
-6. `setup_storage=true`, `validate_gpu=true`는 실제 NFS/GPU backing 준비가 끝난 뒤 선택적으로 켭니다.
+6. `setup_storage=true`는 실제 NFS backing 준비 후 선택합니다. `validate_gpu=true`는 임시 OpenStack network/subnet/router/security group/VM을 생성해 passthrough를 검증하고 종료 시 삭제합니다.
 7. 제거는 `Private Cloud Destroy` workflow로 실행합니다.
 8. `handoff/` 문서를 기준으로 model, public, hybrid, monitoring 담당자에게 필요한 값을 전달합니다.
 
@@ -180,6 +180,7 @@ Workflow 경로:
 - `.github/workflows/private-cloud-plan.yml`: push 또는 수동 plan, Terraform plan, DNS dry-run
 - `.github/workflows/private-cloud-apply.yml`: 수동 apply, Terraform apply, DNS upsert, Kubernetes bootstrap/storage
 - `.github/workflows/private-cloud-destroy.yml`: 수동 destroy, Kubernetes cleanup, Terraform destroy, DNS delete
+- `.github/workflows/private-cloud-gpu-validate.yml`: 수동 또는 apply 후 격리된 임시 OpenStack 리소스로 GPU passthrough 검증
 - `.github/workflows/private-cloud-foundation.yml`: UI에서 직접 실행하지 않는 reusable core
 
 필수 GitHub Secrets:
@@ -188,10 +189,13 @@ Workflow 경로:
 - `PRIVATE_CLOUD_SSH_PUBLIC_KEY`
 - `TF_BACKEND_CONFIG`: `plan`, `apply`, `destroy` 실행 시 사용할 Terraform backend 설정
 
-`install_openstack=true`인 로컬 DevStack 모드에서는 `OPENSTACK_PASSWORD`가 DevStack `admin`
-password로 쓰입니다. workflow는 8-128자, whitespace 없음, `A-Z a-z 0-9 . _ ~ ! -` 문자만 허용하는
-DevStack-safe policy를 먼저 검사합니다. 외부 OpenStack 모드에서는 별도 문자 제한 대신 Keystone login으로
-credential을 검증합니다.
+`install_openstack=true`인 로컬 DevStack 모드에서는 `OPENSTACK_PASSWORD`가 DevStack bootstrap
+password로 쓰입니다. workflow는 DevStack `admin`으로 내부 bootstrap을 수행한 뒤 GitHub Variables의
+`OPENSTACK_USERNAME`/`OPENSTACK_PROJECT_NAME`을 Keystone user/project로 생성하거나 업데이트합니다.
+Terraform provider와 Horizon 로그인은 GitHub Secrets/Variables에 등록된 OpenStack 계정 기준으로 동작합니다.
+
+workflow는 8-128자, whitespace 없음, `A-Z a-z 0-9 . _ ~ ! -` 문자만 허용하는 DevStack-safe policy를
+먼저 검사합니다. 외부 OpenStack 모드에서는 별도 문자 제한 대신 Keystone login으로 credential을 검증합니다.
 
 필수 GitHub Variables:
 

@@ -31,18 +31,6 @@ spec:
   requestAutoCert: false
   features:
     bucketDNS: false
-  buckets:
-    - name: models
-      objectLock: false
-      region: us-east-1
-    - name: datasets
-      objectLock: false
-      region: us-east-1
-    - name: artifacts
-      objectLock: false
-      region: us-east-1
-  users:
-    - name: model-admin
 ---
 apiVersion: v1
 kind: Service
@@ -51,6 +39,7 @@ metadata:
   namespace: minio-tenant
 spec:
   type: LoadBalancer
+  publishNotReadyAddresses: true
   ports:
     - port: 9090
       targetPort: 9090
@@ -66,6 +55,7 @@ metadata:
   namespace: minio-tenant
 spec:
   type: LoadBalancer
+  publishNotReadyAddresses: true
   ports:
     - port: 9000
       targetPort: 9000

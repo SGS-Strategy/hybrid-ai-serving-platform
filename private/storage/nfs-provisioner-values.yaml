@@ -1,0 +1,24 @@
+replicaCount: 1
+storageClass:
+  create: true
+  name: private-nfs-rwx
+  defaultClass: false
+  reclaimPolicy: Retain
+  allowVolumeExpansion: true
+  archiveOnDelete: false
+  pathPattern: "${.PVC.namespace}/${.PVC.name}"
+nfs:
+  server: 192.168.100.1
+  path: /mnt/nfs/hybrid-ai
+  mountOptions:
+    - hard
+    - intr
+    - rsize=1048576
+    - wsize=1048576
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
