@@ -25,7 +25,7 @@ This directory contains Argo CD `Application` manifests for cluster add-ons used
 Update the following values before syncing:
 
 1. `aws-load-balancer-controller-app.yaml`
-   - Replace `REPLACE_ME_WITH_AWS_LB_CONTROLLER_ROLE_ARN` with the actual IRSA role ARN.
+   - Replace `REPLACE_ME_WITH_AWS_LB_CONTROLLER_ROLE_ARN` with the Terraform output `aws_load_balancer_controller_role_arn`.
 2. `kube-prometheus-stack-app.yaml`
    - Replace `CHANGE_ME_GRAFANA_ADMIN_PASSWORD` with the actual Grafana admin password, or move the password handling to an ExternalSecret/Secret management flow.
 3. `kserve-app.yaml`
