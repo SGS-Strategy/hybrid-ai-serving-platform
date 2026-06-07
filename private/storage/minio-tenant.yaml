@@ -50,10 +50,11 @@ metadata:
   name: minio-console
   namespace: minio-tenant
 spec:
-  type: LoadBalancer
+  type: NodePort
   ports:
     - port: 9090
       targetPort: 9090
+      nodePort: 30990
       protocol: TCP
       name: console
   selector:
@@ -65,10 +66,11 @@ metadata:
   name: minio-api
   namespace: minio-tenant
 spec:
-  type: LoadBalancer
+  type: NodePort
   ports:
     - port: 9000
       targetPort: 9000
+      nodePort: 30900
       protocol: TCP
       name: s3
   selector:

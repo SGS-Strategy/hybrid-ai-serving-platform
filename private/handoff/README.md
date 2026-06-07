@@ -16,6 +16,8 @@ repository에 기록하지 않습니다.
 | Control-plane node inventory | Terraform output `control_plane_nodes` | Kubernetes bootstrap |
 | Build-worker node inventory | Terraform output `build_worker_nodes` | Model packaging, worker runtime |
 | GPU-worker node inventory | Terraform output `gpu_worker_nodes` | Model serving, GPU 검증 |
+| GitLab VM inventory | Terraform output `gitlab_nodes` | GitLab 설치/운영 담당 |
+| GitLab GPU runner 기준 | GitLab 학습 repo CI tag `gpu-worker` | Model training 담당 |
 | Namespace 기준 | `kubernetes/` manifest | Model, worker, monitoring |
 | Storage 기준 | `storage/` manifest | Model build, artifact 관리 |
 | GPU 검증 기준 | `gpu-worker/` manifest | Model serving, reliability |
@@ -47,5 +49,13 @@ Private Cloud Foundation에서 담당하지 않는 것:
 - StorageClass 이름: `private-nfs-rwx`
 - model build PVC 이름: `model-build-cache`
 - model artifact PVC 이름: `model-artifacts`
+- MinIO API NodePort: `30900`
+- MinIO console NodePort: `30990`
+- GitLab URL: `https://git.intp.me`
+- GitLab Caddy upstream: `127.0.0.1:18083`
+- GitLab root password 기준: `GITLAB_ROOT_PASSWORD` Secret 또는 VM `/etc/gitlab/initial_root_password`
+- GitLab 계정 생성 기준: 먼저 `root`로 로그인한 뒤 Admin 영역에서 사용자 생성 또는 초대
+- GitLab GPU runner tag: `gpu-worker`
+- GitLab training helper: `hybrid-ai-training-run`
 - GPU RuntimeClass 이름: `nvidia`
 - GPU 검증 Job 이름: `nvidia-smi-validation`

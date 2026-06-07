@@ -14,7 +14,7 @@ import urllib.request
 
 
 API_BASE = "https://api.cloudflare.com/client/v4"
-DEFAULT_RECORDS = ("openstack", "k8s", "grafana", "argocd")
+DEFAULT_RECORDS = ("openstack", "k8s", "grafana", "argocd", "git")
 
 
 def require_env(name: str) -> str:
@@ -149,7 +149,7 @@ def main() -> int:
     base_domain = first_env("PRIVATE_CLOUD_BASE_DOMAIN", "HA_BASE_DOMAIN", default="intp.me")
     tailscale_ip = first_env("PRIVATE_CLOUD_TAILSCALE_IP", "HA_TAILSCALE_IP")
     ttl = int(first_env("PRIVATE_CLOUD_DNS_TTL", "HA_CLOUDFLARE_DNS_TTL", default="120"))
-    services = tuple(service.strip() for service in args.services.split(",") if service.strip())
+    services = tuple(dict.fromkeys(service.strip() for service in args.services.split(",") if service.strip()))
 
     operation = "delete" if args.delete else "upsert"
     mode = "apply" if args.apply else "dry-run"

@@ -67,24 +67,27 @@ env:
   PRIVATE_CLOUD_BASE_DOMAIN: ${{ vars.PRIVATE_CLOUD_BASE_DOMAIN }}
   PRIVATE_CLOUD_TAILSCALE_IP: ${{ vars.PRIVATE_CLOUD_TAILSCALE_IP }}
   PRIVATE_CLOUD_DNS_TTL: ${{ vars.PRIVATE_CLOUD_DNS_TTL }}
-  PRIVATE_CLOUD_DNS_SERVICES: ${{ vars.PRIVATE_CLOUD_DNS_SERVICES }}
+  PRIVATE_CLOUD_DNS_SERVICES: ${{ vars.PRIVATE_CLOUD_DNS_SERVICES && format('{0},git', vars.PRIVATE_CLOUD_DNS_SERVICES) || 'openstack,k8s,grafana,argocd,git' }}
   # Terraform backend
   TF_BACKEND_CONFIG: ${{ secrets.TF_BACKEND_CONFIG }}
-  TF_BACKEND_TYPE: ${{ vars.TF_BACKEND_TYPE }}
+  TF_BACKEND_TYPE: ${{ vars.TF_BACKEND_TYPE || 'local' }}
   PRIVATE_CLOUD_TFVARS: ${{ secrets.PRIVATE_CLOUD_TFVARS }}
   # SSH keys
   PRIVATE_CLOUD_SSH_PUBLIC_KEY: ${{ secrets.PRIVATE_CLOUD_SSH_PUBLIC_KEY }}
   PRIVATE_CLOUD_SSH_PRIVATE_KEY: ${{ secrets.PRIVATE_CLOUD_SSH_PRIVATE_KEY }}
-  PRIVATE_CLOUD_SSH_USER: ${{ vars.PRIVATE_CLOUD_SSH_USER }}
+  PRIVATE_CLOUD_SSH_USER: ${{ vars.PRIVATE_CLOUD_SSH_USER || 'ubuntu' }}
   PRIVATE_CLOUD_KUBECONFIG_B64: ${{ secrets.PRIVATE_CLOUD_KUBECONFIG_B64 }}
   # Terraform variables
   TF_VAR_ssh_public_key: ${{ secrets.PRIVATE_CLOUD_SSH_PUBLIC_KEY }}
-  TF_VAR_control_plane_image_name: ${{ vars.CONTROL_PLANE_IMAGE_NAME }}
-  TF_VAR_control_plane_flavor_name: ${{ vars.CONTROL_PLANE_FLAVOR_NAME }}
-  TF_VAR_build_worker_image_name: ${{ vars.BUILD_WORKER_IMAGE_NAME }}
-  TF_VAR_build_worker_flavor_name: ${{ vars.BUILD_WORKER_FLAVOR_NAME }}
-  TF_VAR_gpu_worker_image_name: ${{ vars.GPU_WORKER_IMAGE_NAME }}
-  TF_VAR_gpu_worker_flavor_name: ${{ vars.GPU_WORKER_FLAVOR_NAME }}
+  TF_VAR_control_plane_image_name: ${{ vars.CONTROL_PLANE_IMAGE_NAME || 'ubuntu-22.04' }}
+  TF_VAR_control_plane_flavor_name: ${{ vars.CONTROL_PLANE_FLAVOR_NAME || 'm1.medium' }}
+  TF_VAR_build_worker_image_name: ${{ vars.BUILD_WORKER_IMAGE_NAME || 'ubuntu-22.04' }}
+  TF_VAR_build_worker_flavor_name: ${{ vars.BUILD_WORKER_FLAVOR_NAME || 'm1.large' }}
+  TF_VAR_gpu_worker_image_name: ${{ vars.GPU_WORKER_IMAGE_NAME || 'ubuntu-22.04' }}
+  TF_VAR_gpu_worker_flavor_name: ${{ vars.GPU_WORKER_FLAVOR_NAME || 'g1.large' }}
+  TF_VAR_gitlab_count: ${{ vars.GITLAB_COUNT || '1' }}
+  TF_VAR_gitlab_image_name: ${{ vars.GITLAB_IMAGE_NAME || 'ubuntu-22.04' }}
+  TF_VAR_gitlab_flavor_name: ${{ vars.GITLAB_FLAVOR_NAME || 'm1.large' }}
   HA_OPENSTACK_GPU_PCI_ALIAS: ${{ vars.OPENSTACK_GPU_PCI_ALIAS || 'nvidia-gpu' }}
   HA_OPENSTACK_GPU_PCI_VENDOR_ID: ${{ vars.OPENSTACK_GPU_PCI_VENDOR_ID || '10de' }}
   HA_OPENSTACK_GPU_PCI_PRODUCT_ID: ${{ vars.OPENSTACK_GPU_PCI_PRODUCT_ID || 'auto' }}
@@ -99,7 +102,7 @@ env:
 jobs:
   install-openstack:
     name: Install OpenStack (DevStack)
-    runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER }}
+    runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER || 'private-cloud' }}
     if: ${{ inputs.install_openstack }}
     steps:
       - name: Checkout
@@ -731,7 +734,8 @@ jobs:
           lxc exec ha-openstack -- sudo -u stack -H bash -s -- \
             "${TF_VAR_control_plane_image_name}" \
             "${TF_VAR_build_worker_image_name}" \
-            "${TF_VAR_gpu_worker_image_name}" <<'ENSURE_IMAGE'
+            "${TF_VAR_gpu_worker_image_name}" \
+            "${TF_VAR_gitlab_image_name}" <<'ENSURE_IMAGE'
           set -eo pipefail
           cd /opt/stack/devstack
           source openrc admin admin >/dev/null
@@ -834,7 +838,7 @@ jobs:
 
   terraform:
     name: Terraform OpenStack
-    runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER }}
+    runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER || 'private-cloud' }}
     needs: install-openstack
     if: always() && (needs.install-openstack.result == 'success' || needs.install-openstack.result == 'skipped')
     env:
@@ -1027,6 +1031,9 @@ jobs:
               printf 'build_worker_image_name = "%s"\n' "${TF_VAR_build_worker_image_name}"
               printf 'gpu_worker_image_name = "%s"\n' "${TF_VAR_gpu_worker_image_name}"
               printf 'gpu_worker_flavor_name = "%s"\n' "${TF_VAR_gpu_worker_flavor_name}"
+              printf 'gitlab_count = %s\n' "${TF_VAR_gitlab_count}"
+              printf 'gitlab_image_name = "%s"\n' "${TF_VAR_gitlab_image_name}"
+              printf 'gitlab_flavor_name = "%s"\n' "${TF_VAR_gitlab_flavor_name}"
             } > zz-local-devstack.auto.tfvars
             echo "Wrote Terraform DevStack overrides for local OpenStack"
           fi
@@ -1186,7 +1193,7 @@ jobs:
 
   cleanup-devstack:
     name: Cleanup DevStack Container
-    runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER }}
+    runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER || 'private-cloud' }}
     needs: terraform
     if: ${{ always() && inputs.action == 'destroy' && inputs.install_openstack && inputs.force_cleanup && needs.terraform.result == 'success' }}
     steps:
@@ -1196,16 +1203,367 @@ jobs:
           lxc delete ha-openstack --force 2>/dev/null || true
           echo "DevStack container removed"
 
+  setup-gitlab:
+    name: Setup GitLab
+    runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER || 'private-cloud' }}
+    needs: terraform
+    if: ${{ always() && needs.terraform.result == 'success' && inputs.action == 'apply' }}
+    defaults:
+      run:
+        working-directory: private/openstack
+    env:
+      GITLAB_INSTALL_ENABLED: ${{ vars.GITLAB_INSTALL_ENABLED || 'true' }}
+      GITLAB_DOMAIN: ${{ vars.GITLAB_DOMAIN || 'git.intp.me' }}
+      GITLAB_EXTERNAL_URL: ${{ vars.GITLAB_EXTERNAL_URL || 'https://git.intp.me' }}
+      GITLAB_PACKAGE: ${{ vars.GITLAB_PACKAGE || 'gitlab-ce' }}
+      GITLAB_ROOT_PASSWORD: ${{ secrets.GITLAB_ROOT_PASSWORD }}
+      GITLAB_SIGNUP_ENABLED: ${{ vars.GITLAB_SIGNUP_ENABLED || 'false' }}
+      GITLAB_UPSTREAM_PORT: ${{ vars.GITLAB_UPSTREAM_PORT || '18083' }}
+      HA_OPENSTACK_SSH_USER: ${{ vars.PRIVATE_CLOUD_SSH_USER || 'ubuntu' }}
+      HA_OPENSTACK_SSH_KEY: /tmp/private-cloud-gitlab-ssh
+      HA_OPENSTACK_SSH_CONFIG: ${{ github.workspace }}/.ha/openstack/gitlab_ssh_config
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check GitLab job tools
+        run: |
+          missing=0
+          for tool in curl ssh python3; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              echo "::error::Missing required runner tool: ${tool}"
+              missing=1
+            fi
+          done
+          if [[ "${INSTALL_OPENSTACK}" == "true" ]] && ! command -v lxc >/dev/null 2>&1; then
+            echo "::error::Missing required runner tool for local DevStack proxy: lxc"
+            missing=1
+          fi
+          exit "${missing}"
+
+      - name: Download Terraform outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-output
+          path: .ha/openstack
+
+      - name: Setup SSH key
+        run: |
+          if [[ -z "${PRIVATE_CLOUD_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "::error::Missing required secret: PRIVATE_CLOUD_SSH_PRIVATE_KEY"
+            exit 1
+          fi
+          mkdir -p "$(dirname "$HA_OPENSTACK_SSH_KEY")" "$(dirname "$HA_OPENSTACK_SSH_CONFIG")"
+          printf '%s\n' "${PRIVATE_CLOUD_SSH_PRIVATE_KEY}" > "$HA_OPENSTACK_SSH_KEY"
+          chmod 600 "$HA_OPENSTACK_SSH_KEY"
+          {
+            printf 'Host *\n'
+            printf '  User %s\n' "$HA_OPENSTACK_SSH_USER"
+            printf '  IdentityFile %s\n' "$HA_OPENSTACK_SSH_KEY"
+            printf '  BatchMode yes\n'
+            printf '  StrictHostKeyChecking no\n'
+            printf '  CheckHostIP no\n'
+            printf '  UserKnownHostsFile /dev/null\n'
+            printf '  LogLevel ERROR\n'
+            if [[ "${INSTALL_OPENSTACK}" == "true" ]]; then
+              printf '  ProxyCommand lxc exec ha-openstack -- nc %%h %%p\n'
+            fi
+          } > "$HA_OPENSTACK_SSH_CONFIG"
+          chmod 600 "$HA_OPENSTACK_SSH_CONFIG"
+          echo "SSH key and config configured"
+
+      - name: Get GitLab inputs
+        id: gitlab
+        run: |
+          if [[ "${GITLAB_INSTALL_ENABLED}" != "true" ]]; then
+            echo "::notice::GITLAB_INSTALL_ENABLED is not true; skipping GitLab installation"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -n "${GITLAB_ROOT_PASSWORD:-}" ]]; then
+            echo "::add-mask::$GITLAB_ROOT_PASSWORD"
+            python3 - <<'PY'
+          import os
+          import sys
+
+          password = os.environ.get("GITLAB_ROOT_PASSWORD", "")
+          errors = []
+          if len(password) < 8:
+              errors.append("GITLAB_ROOT_PASSWORD must be at least 8 characters")
+          if any(ch.isspace() for ch in password):
+              errors.append("GITLAB_ROOT_PASSWORD must not contain whitespace")
+          if errors:
+              for error in errors:
+                  print(f"::error::{error}", file=sys.stderr)
+              sys.exit(1)
+          PY
+          fi
+
+          cp "${GITHUB_WORKSPACE}/.ha/openstack/terraform-output.json" /tmp/tf-output.json
+          python3 - <<'PY' > /tmp/gitlab-output.env
+          import json
+          import sys
+
+          with open('/tmp/tf-output.json', 'r', encoding='utf-8') as handle:
+              data = json.load(handle)
+
+          nodes = data.get('gitlab_nodes', {}).get('value', []) or []
+          if not nodes:
+              print("NO_GITLAB_NODES=true")
+              sys.exit(0)
+
+          node = nodes[0]
+          target = node.get('floating_ip') or node.get('private_ip') or ''
+          if not target:
+              print("NO_GITLAB_TARGET=true")
+              sys.exit(0)
+
+          print(f"GITLAB_NODE_NAME={node.get('name', '')}")
+          print(f"GITLAB_TARGET_IP={target}")
+          print(f"GITLAB_PRIVATE_IP={node.get('private_ip', '') or ''}")
+          print(f"GITLAB_FLOATING_IP={node.get('floating_ip', '') or ''}")
+          PY
+          cat /tmp/gitlab-output.env >> "$GITHUB_OUTPUT"
+          cat /tmp/gitlab-output.env
+
+          if grep -q '^NO_GITLAB_NODES=true$' /tmp/gitlab-output.env; then
+            echo "::notice::Terraform output does not contain GitLab nodes; skipping GitLab installation"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if grep -q '^NO_GITLAB_TARGET=true$' /tmp/gitlab-output.env; then
+            echo "::notice::GitLab node has no reachable IP; skipping GitLab installation"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install GitLab CE
+        if: ${{ steps.gitlab.outputs.enabled == 'true' }}
+        timeout-minutes: 70
+        run: |
+          root_password_file=""
+          if [[ -n "${GITLAB_ROOT_PASSWORD:-}" ]]; then
+            root_password_file="/tmp/gitlab-root-password-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            printf '%s' "$GITLAB_ROOT_PASSWORD" \
+              | ssh -F "$HA_OPENSTACK_SSH_CONFIG" "${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}" \
+                  "umask 077 && cat > ${root_password_file}"
+          fi
+
+          ssh -F "$HA_OPENSTACK_SSH_CONFIG" "${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}" bash -s -- \
+            "$GITLAB_EXTERNAL_URL" \
+            "$GITLAB_DOMAIN" \
+            "$GITLAB_PACKAGE" \
+            "$GITLAB_SIGNUP_ENABLED" \
+            "$root_password_file" <<'REMOTE'
+          set -euo pipefail
+
+          external_url="$1"
+          gitlab_domain="$2"
+          gitlab_package="$3"
+          gitlab_signup_enabled="$4"
+          root_password_file="$5"
+
+          cleanup() {
+            if [[ -n "$root_password_file" ]]; then
+              sudo rm -f "$root_password_file" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          wait_for_apt_locks() {
+            local deadline=$((SECONDS + 900))
+            local locks=(
+              /var/lib/dpkg/lock
+              /var/lib/dpkg/lock-frontend
+              /var/lib/apt/lists/lock
+              /var/cache/apt/archives/lock
+            )
+            while true; do
+              local busy=0
+              if command -v fuser >/dev/null 2>&1; then
+                for lock in "${locks[@]}"; do
+                  if sudo fuser "$lock" >/dev/null 2>&1; then
+                    busy=1
+                    break
+                  fi
+                done
+              fi
+              [[ "$busy" -eq 0 ]] && return 0
+              if (( SECONDS >= deadline )); then
+                echo "Timed out waiting for apt/dpkg locks" >&2
+                return 1
+              fi
+              sleep 5
+            done
+          }
+
+          sudo cloud-init status --wait >/dev/null 2>&1 || true
+          sudo hostnamectl set-hostname "$gitlab_domain" || true
+
+          wait_for_apt_locks
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ca-certificates curl openssh-server tzdata perl
+
+          if ! dpkg-query -W "$gitlab_package" >/dev/null 2>&1; then
+            case "$gitlab_package" in
+              gitlab-ce) repo_path="gitlab/gitlab-ce" ;;
+              gitlab-ee) repo_path="gitlab/gitlab-ee" ;;
+              *) echo "unsupported GitLab package: $gitlab_package" >&2; exit 1 ;;
+            esac
+            curl -fsSL \
+              "https://packages.gitlab.com/install/repositories/${repo_path}/script.deb.sh" \
+              -o /tmp/gitlab-package-repository.deb.sh
+            sudo bash /tmp/gitlab-package-repository.deb.sh
+            wait_for_apt_locks
+            sudo EXTERNAL_URL="$external_url" apt-get install -y -qq "$gitlab_package"
+          fi
+
+          sudo python3 - "$external_url" <<'PY'
+          import sys
+          from pathlib import Path
+
+          external_url = sys.argv[1]
+          path = Path("/etc/gitlab/gitlab.rb")
+          content = path.read_text(encoding="utf-8") if path.exists() else ""
+          begin = "# BEGIN hybrid-ai GitLab settings"
+          end = "# END hybrid-ai GitLab settings"
+          if begin in content and end in content:
+              before, rest = content.split(begin, 1)
+              _, after = rest.split(end, 1)
+              content = before + after.lstrip("\n")
+          block = f"""
+          {begin}
+          external_url {external_url!r}
+          letsencrypt['enable'] = false
+          nginx['listen_port'] = 80
+          nginx['listen_https'] = false
+          gitlab_rails['gitlab_shell_ssh_port'] = 22
+          nginx['proxy_set_headers'] = {{
+            "Host" => "$http_host",
+            "X-Real-IP" => "$remote_addr",
+            "X-Forwarded-For" => "$proxy_add_x_forwarded_for",
+            "X-Forwarded-Proto" => "https",
+            "X-Forwarded-Ssl" => "on",
+            "X-Forwarded-Port" => "443"
+          }}
+          {end}
+          """
+          path.write_text(content.rstrip() + "\n" + block.lstrip(), encoding="utf-8")
+          PY
+
+          sudo gitlab-ctl reconfigure
+
+          if [[ "$gitlab_signup_enabled" == "true" ]]; then
+            sudo gitlab-rails runner "::Gitlab::CurrentSettings.update!(signup_enabled: true)"
+          else
+            sudo gitlab-rails runner "::Gitlab::CurrentSettings.update!(signup_enabled: false)"
+          fi
+
+          if [[ -n "$root_password_file" && -s "$root_password_file" ]]; then
+            sudo gitlab-rails runner "password = File.read('${root_password_file}').strip; user = User.find_by_username('root'); user.password = password; user.password_confirmation = password; user.save!"
+          fi
+
+          sudo gitlab-ctl status
+          for i in {1..90}; do
+            if curl -fsS http://127.0.0.1/-/readiness >/dev/null 2>&1 || curl -fsS http://127.0.0.1/users/sign_in >/dev/null 2>&1; then
+              echo "GitLab is responding locally"
+              exit 0
+            fi
+            echo "Waiting for GitLab web readiness... ($i/90)"
+            sleep 10
+          done
+          echo "GitLab did not become ready on local HTTP" >&2
+          exit 1
+          REMOTE
+
+      - name: Configure GitLab reverse proxy upstream
+        if: ${{ steps.gitlab.outputs.enabled == 'true' }}
+        run: |
+          pgrep -f "ssh .*127.0.0.1:${GITLAB_UPSTREAM_PORT}:127.0.0.1:80" | xargs -r kill || true
+
+          if [[ "${INSTALL_OPENSTACK}" == "true" && -n "${{ steps.gitlab.outputs.GITLAB_PRIVATE_IP }}" ]] && lxc info ha-openstack >/dev/null 2>&1; then
+            lxc config device remove ha-openstack gitlab-proxy >/dev/null 2>&1 || true
+            lxc config device add ha-openstack gitlab-proxy proxy \
+              "listen=tcp:127.0.0.1:${GITLAB_UPSTREAM_PORT}" \
+              "connect=tcp:${{ steps.gitlab.outputs.GITLAB_PRIVATE_IP }}:80"
+            echo "Configured LXD proxy 127.0.0.1:${GITLAB_UPSTREAM_PORT} -> ${{ steps.gitlab.outputs.GITLAB_PRIVATE_IP }}:80"
+          else
+            ssh -F "$HA_OPENSTACK_SSH_CONFIG" \
+              -fN \
+              -L "127.0.0.1:${GITLAB_UPSTREAM_PORT}:127.0.0.1:80" \
+              "${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}"
+            echo "Started SSH proxy 127.0.0.1:${GITLAB_UPSTREAM_PORT} -> ${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}:80"
+          fi
+
+          for i in {1..30}; do
+            if curl -fsS "http://127.0.0.1:${GITLAB_UPSTREAM_PORT}/users/sign_in" >/dev/null 2>&1 || curl -fsS "http://127.0.0.1:${GITLAB_UPSTREAM_PORT}/-/readiness" >/dev/null 2>&1; then
+              echo "GitLab upstream proxy is ready on 127.0.0.1:${GITLAB_UPSTREAM_PORT}"
+              {
+                echo "## GitLab"
+                echo
+                echo "| Field | Value |"
+                echo "| --- | --- |"
+                echo "| URL | \`${GITLAB_EXTERNAL_URL}\` |"
+                echo "| Domain | \`${GITLAB_DOMAIN}\` |"
+                echo "| Node | \`${{ steps.gitlab.outputs.GITLAB_NODE_NAME }}\` |"
+                echo "| Upstream | \`127.0.0.1:${GITLAB_UPSTREAM_PORT}\` |"
+                echo "| Sign-up enabled | \`${GITLAB_SIGNUP_ENABLED}\` |"
+                if [[ -n "${GITLAB_ROOT_PASSWORD:-}" ]]; then
+                  echo "| Root password | configured from \`GITLAB_ROOT_PASSWORD\` secret |"
+                else
+                  echo "| Root password | generated on VM at \`/etc/gitlab/initial_root_password\` |"
+                fi
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Waiting for GitLab upstream proxy... ($i/30)"
+            sleep 10
+          done
+
+          echo "::error::GitLab upstream proxy did not become ready on 127.0.0.1:${GITLAB_UPSTREAM_PORT}"
+          exit 1
+
+      - name: Reload Caddy for GitLab
+        if: ${{ steps.gitlab.outputs.enabled == 'true' }}
+        env:
+          HA_GIT_DOMAIN: ${{ env.GITLAB_DOMAIN }}
+          HA_GITLAB_UPSTREAM: ${{ format('127.0.0.1:{0}', env.GITLAB_UPSTREAM_PORT) }}
+        run: |
+          if ! command -v caddy >/dev/null 2>&1; then
+            echo "::notice::caddy binary not found on runner; reload manually after applying private/reverse-proxy/Caddyfile.cloudflare"
+            exit 0
+          fi
+
+          config="../reverse-proxy/Caddyfile.cloudflare"
+          if caddy validate --config "$config"; then
+            if caddy reload --config "$config"; then
+              echo "Reloaded Caddy with GitLab route for ${HA_GIT_DOMAIN}"
+            elif command -v sudo >/dev/null 2>&1 && sudo --preserve-env=HA_CADDY_ACME_EMAIL,HA_OPENSTACK_DOMAIN,HA_K8S_DOMAIN,HA_GRAFANA_DOMAIN,HA_ARGOCD_DOMAIN,HA_GIT_DOMAIN,HA_OPENSTACK_HORIZON_UPSTREAM,HA_K8S_DASHBOARD_UPSTREAM,HA_GRAFANA_UPSTREAM,HA_ARGOCD_UPSTREAM,HA_GITLAB_UPSTREAM,CLOUDFLARE_API_TOKEN caddy reload --config "$config"; then
+              echo "Reloaded Caddy with GitLab route for ${HA_GIT_DOMAIN}"
+            else
+              echo "::notice::Caddy reload failed or Caddy is not running; run caddy reload manually with ${config}"
+            fi
+          else
+            echo "::notice::Caddy config validation failed on this runner; check that the Cloudflare DNS module is installed"
+          fi
+
+      - name: Cleanup GitLab sensitive files
+        if: always()
+        run: |
+          rm -f "$HA_OPENSTACK_SSH_KEY" "$HA_OPENSTACK_SSH_CONFIG"
+
   bootstrap-k8s:
     name: Bootstrap Kubernetes
-    runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER }}
+    runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER || 'private-cloud' }}
     needs: terraform
     if: ${{ always() && needs.terraform.result == 'success' && inputs.bootstrap_kubernetes && inputs.action == 'apply' }}
     defaults:
       run:
         working-directory: private/openstack
     env:
-      HA_OPENSTACK_SSH_USER: ${{ vars.PRIVATE_CLOUD_SSH_USER }}
+      HA_OPENSTACK_SSH_USER: ${{ vars.PRIVATE_CLOUD_SSH_USER || 'ubuntu' }}
       HA_OPENSTACK_SSH_KEY: /tmp/private-cloud-ssh
       HA_OPENSTACK_SSH_CONFIG: ${{ github.workspace }}/.ha/openstack/ssh_config
       HA_OPENSTACK_KUBECONFIG: ${{ github.workspace }}/.ha/openstack/kubeconfig
@@ -1376,7 +1734,7 @@ jobs:
 
   setup-storage:
     name: Setup Storage (MinIO + NFS)
-    runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER }}
+    runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER || 'private-cloud' }}
     needs: [bootstrap-k8s, terraform]
     if: ${{ always() && needs.bootstrap-k8s.result == 'success' && needs.terraform.result == 'success' && inputs.action == 'apply' && inputs.bootstrap_kubernetes && inputs.setup_storage }}
     defaults:
@@ -1385,9 +1743,9 @@ jobs:
     env:
       KUBECONFIG: ${{ github.workspace }}/.ha/openstack/kubeconfig
       MINIO_VOLUME_SIZE: ${{ inputs.minio_volume_size || '50' }}
-      MINIO_ROOT_USER: ${{ secrets.MINIO_ROOT_USER }}
+      MINIO_ROOT_USER: ${{ vars.MINIO_ROOT_USER || 'minioadmin' }}
       MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD }}
-      HA_OPENSTACK_SSH_USER: ${{ vars.PRIVATE_CLOUD_SSH_USER }}
+      HA_OPENSTACK_SSH_USER: ${{ vars.PRIVATE_CLOUD_SSH_USER || 'ubuntu' }}
       HA_OPENSTACK_SSH_KEY: /tmp/private-cloud-storage-ssh
       HA_OPENSTACK_SSH_CONFIG: ${{ github.workspace }}/.ha/openstack/storage_ssh_config
       HA_KUBECTL_TUNNEL_PORT: "16443"
@@ -1412,6 +1770,9 @@ jobs:
 
       - name: Setup kubectl
         uses: azure/setup-kubectl@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
 
       - name: Download kubeconfig
         uses: actions/download-artifact@v4
@@ -1520,10 +1881,45 @@ jobs:
           REMOTE
           echo "NFS server prepared"
 
+      - name: Install local-path provisioner
+        run: |
+          echo "Installing local-path provisioner..."
+          kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.31/deploy/local-path-storage.yaml
+          kubectl -n local-path-storage rollout status deployment/local-path-provisioner --timeout=600s
+          for i in {1..30}; do
+            if kubectl get storageclass local-path >/dev/null 2>&1; then
+              echo "local-path storage class is ready"
+              break
+            fi
+            echo "Waiting for local-path storage class... ($i/30)"
+            sleep 10
+          done
+          kubectl get storageclass local-path
+
       - name: Install MinIO Operator
         run: |
           echo "Installing MinIO Operator..."
-          kubectl apply -f ../storage/minio-operator.yaml
+          values_file="${RUNNER_TEMP}/minio-operator-values.yaml"
+          cat > "$values_file" <<'VALUES'
+          operator:
+            replicaCount: 1
+            resources:
+              requests:
+                memory: 256Mi
+                cpu: 100m
+              limits:
+                memory: 512Mi
+                cpu: 500m
+          VALUES
+          helm repo add minio-operator https://operator.min.io/
+          helm repo update
+          helm upgrade --install minio-operator minio-operator/operator \
+            --namespace minio-operator \
+            --create-namespace \
+            --version 7.1.1 \
+            --values "$values_file" \
+            --wait \
+            --timeout 10m
           for i in {1..60}; do
             if kubectl get crd tenants.minio.min.io >/dev/null 2>&1; then
               echo "MinIO Tenant CRD is ready"
@@ -1552,16 +1948,6 @@ jobs:
             sleep 10
           done
           kubectl -n minio-operator rollout status deployment/minio-operator --timeout=600s
-
-          for i in {1..30}; do
-            if kubectl get storageclass local-path >/dev/null 2>&1; then
-              echo "local-path storage class is ready"
-              break
-            fi
-            echo "Waiting for local-path storage class... ($i/30)"
-            sleep 10
-          done
-          kubectl get storageclass local-path
 
           minio_root_user="${MINIO_ROOT_USER:-minioadmin}"
           minio_root_password="${MINIO_ROOT_PASSWORD:-}"
@@ -1619,7 +2005,44 @@ jobs:
       - name: Install NFS Provisioner
         run: |
           echo "Installing NFS provisioner with server ${{ steps.storage.outputs.NFS_SERVER_IP }}..."
-          sed -e "s/server: 192.168.100.1/server: ${{ steps.storage.outputs.NFS_SERVER_IP }}/g" ../storage/nfs-provisioner.yaml | kubectl apply -f -
+          values_file="${RUNNER_TEMP}/nfs-subdir-external-provisioner-values.yaml"
+          nfs_server="${{ steps.storage.outputs.NFS_SERVER_IP }}"
+          cat > "$values_file" <<VALUES
+          replicaCount: 1
+          storageClass:
+            create: true
+            name: private-nfs-rwx
+            defaultClass: false
+            reclaimPolicy: Retain
+            allowVolumeExpansion: true
+            archiveOnDelete: false
+            pathPattern: "\${.PVC.namespace}/\${.PVC.name}"
+          nfs:
+            server: ${nfs_server}
+            path: /mnt/nfs/hybrid-ai
+            mountOptions:
+              - hard
+              - intr
+              - rsize=1048576
+              - wsize=1048576
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          VALUES
+          helm repo add nfs-subdir-external-provisioner https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner/
+          helm repo update
+          helm upgrade --install nfs-subdir-external-provisioner \
+            nfs-subdir-external-provisioner/nfs-subdir-external-provisioner \
+            --namespace nfs-provisioner \
+            --create-namespace \
+            --version 4.0.18 \
+            --values "$values_file" \
+            --wait \
+            --timeout 10m
           for i in {1..60}; do
             if kubectl get storageclass private-nfs-rwx >/dev/null 2>&1; then
               echo "NFS storage class is ready"
@@ -1674,9 +2097,439 @@ jobs:
           pgrep -f "ssh .*127.0.0.1:${HA_KUBECTL_TUNNEL_PORT}:127.0.0.1:6443" | xargs -r kill || true
           rm -f "$HA_OPENSTACK_SSH_KEY" "$HA_OPENSTACK_SSH_CONFIG" "$KUBECONFIG"
 
+  setup-gitlab-gpu-runner:
+    name: Setup GitLab GPU Runner
+    runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER || 'private-cloud' }}
+    needs: [terraform, bootstrap-k8s, setup-storage, setup-gitlab]
+    if: ${{ always() && needs.terraform.result == 'success' && needs.bootstrap-k8s.result == 'success' && needs.setup-gitlab.result == 'success' && (!inputs.setup_storage || needs.setup-storage.result == 'success') && inputs.action == 'apply' && inputs.bootstrap_kubernetes }}
+    defaults:
+      run:
+        working-directory: private/openstack
+    env:
+      GITLAB_URL: ${{ vars.GITLAB_URL || vars.GITLAB_EXTERNAL_URL || 'https://git.intp.me' }}
+      GITLAB_RUNNER_TOKEN: ${{ secrets.GITLAB_RUNNER_TOKEN }}
+      GITLAB_GPU_RUNNER_NAME_PREFIX: ${{ vars.GITLAB_GPU_RUNNER_NAME_PREFIX || 'hybrid-ai-gpu' }}
+      GITLAB_GPU_RUNNER_TAGS: ${{ vars.GITLAB_GPU_RUNNER_TAGS || 'gpu-worker' }}
+      SETUP_STORAGE: ${{ inputs.setup_storage && 'true' || 'false' }}
+      HA_OPENSTACK_SSH_USER: ${{ vars.PRIVATE_CLOUD_SSH_USER || 'ubuntu' }}
+      HA_OPENSTACK_SSH_KEY: /tmp/private-cloud-gitlab-gpu-runner-ssh
+      HA_OPENSTACK_SSH_CONFIG: ${{ github.workspace }}/.ha/openstack/gitlab_gpu_runner_ssh_config
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check GitLab runner job tools
+        run: |
+          missing=0
+          for tool in ssh python3; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              echo "::error::Missing required runner tool: ${tool}"
+              missing=1
+            fi
+          done
+          if [[ "${INSTALL_OPENSTACK}" == "true" ]] && ! command -v lxc >/dev/null 2>&1; then
+            echo "::error::Missing required runner tool for local DevStack SSH proxy: lxc"
+            missing=1
+          fi
+          exit "${missing}"
+
+      - name: Download Terraform outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-output
+          path: .ha/openstack
+
+      - name: Setup SSH key
+        run: |
+          if [[ -z "${PRIVATE_CLOUD_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "::error::Missing required secret: PRIVATE_CLOUD_SSH_PRIVATE_KEY"
+            exit 1
+          fi
+          mkdir -p "$(dirname "$HA_OPENSTACK_SSH_KEY")" "$(dirname "$HA_OPENSTACK_SSH_CONFIG")"
+          printf '%s\n' "${PRIVATE_CLOUD_SSH_PRIVATE_KEY}" > "$HA_OPENSTACK_SSH_KEY"
+          chmod 600 "$HA_OPENSTACK_SSH_KEY"
+          {
+            printf 'Host *\n'
+            printf '  User %s\n' "$HA_OPENSTACK_SSH_USER"
+            printf '  IdentityFile %s\n' "$HA_OPENSTACK_SSH_KEY"
+            printf '  BatchMode yes\n'
+            printf '  StrictHostKeyChecking no\n'
+            printf '  CheckHostIP no\n'
+            printf '  UserKnownHostsFile /dev/null\n'
+            printf '  LogLevel ERROR\n'
+            if [[ "${INSTALL_OPENSTACK}" == "true" ]]; then
+              printf '  ProxyCommand lxc exec ha-openstack -- nc %%h %%p\n'
+            fi
+          } > "$HA_OPENSTACK_SSH_CONFIG"
+          chmod 600 "$HA_OPENSTACK_SSH_CONFIG"
+          echo "SSH key and config configured"
+
+      - name: Get GitLab GPU runner inputs
+        id: gitlab_gpu_runner
+        run: |
+          if [[ -z "${GITLAB_URL:-}" ]]; then
+            echo "::notice::GITLAB_URL variable is empty; skipping GitLab GPU runner registration"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -n "${GITLAB_RUNNER_TOKEN:-}" ]]; then
+            echo "::add-mask::$GITLAB_RUNNER_TOKEN"
+          fi
+
+          cp "${GITHUB_WORKSPACE}/.ha/openstack/terraform-output.json" /tmp/tf-output.json
+          python3 - <<'PY' > /tmp/gitlab-gpu-runner-output.env
+          import json
+          import os
+          import sys
+
+          with open('/tmp/tf-output.json', 'r', encoding='utf-8') as handle:
+              data = json.load(handle)
+
+          gpu_nodes = data.get('gpu_worker_nodes', {}).get('value', []) or []
+          gitlab_nodes = data.get('gitlab_nodes', {}).get('value', []) or []
+          nfs_server_ip = data.get('nfs_server_ip', {}).get('value') if os.environ.get('SETUP_STORAGE') == 'true' else ''
+          print(f"NFS_SERVER_IP={nfs_server_ip or ''}")
+
+          if gitlab_nodes:
+              gitlab_node = gitlab_nodes[0]
+              gitlab_target = gitlab_node.get('floating_ip') or gitlab_node.get('private_ip') or ''
+              print(f"GITLAB_TARGET_IP={gitlab_target}")
+          else:
+              print("NO_GITLAB_NODES=true")
+
+          with open('/tmp/gitlab-gpu-runner-inventory.tsv', 'w', encoding='utf-8') as inventory:
+              for node in gpu_nodes:
+                  target = node.get('floating_ip') or node.get('private_ip') or ''
+                  if target:
+                      inventory.write(f"{node.get('name', '')}\t{target}\n")
+
+          if not gpu_nodes:
+              print("NO_GPU_NODES=true")
+          PY
+          cat /tmp/gitlab-gpu-runner-output.env >> "$GITHUB_OUTPUT"
+          cat /tmp/gitlab-gpu-runner-output.env
+          gitlab_target_ip="$(awk -F= '$1 == "GITLAB_TARGET_IP" { print substr($0, index($0, "=") + 1) }' /tmp/gitlab-gpu-runner-output.env | tail -n 1)"
+
+          if grep -q '^NO_GPU_NODES=true$' /tmp/gitlab-gpu-runner-output.env; then
+            echo "::notice::Terraform output does not contain GPU worker nodes; skipping GitLab GPU runner registration"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ ! -s /tmp/gitlab-gpu-runner-inventory.tsv ]]; then
+            echo "::notice::GPU worker nodes exist but have no reachable IP; skipping GitLab GPU runner registration"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if grep -q '^NO_GITLAB_NODES=true$' /tmp/gitlab-gpu-runner-output.env && [[ -z "${GITLAB_RUNNER_TOKEN:-}" ]]; then
+            echo "::notice::Terraform output does not contain GitLab nodes and GITLAB_RUNNER_TOKEN is empty; skipping GitLab GPU runner registration"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ -z "${GITLAB_RUNNER_TOKEN:-}" && -z "$gitlab_target_ip" ]]; then
+            echo "::notice::GitLab runner token auto-generation needs a reachable GitLab VM; skipping GitLab GPU runner registration"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Check existing GitLab GPU runner registrations
+        id: gitlab_gpu_runner_plan
+        if: ${{ steps.gitlab_gpu_runner.outputs.enabled == 'true' }}
+        run: |
+          needs_registration=false
+          while IFS=$'\t' read -r node_name target_ip; do
+            [[ -n "$node_name" && -n "$target_ip" ]] || continue
+            safe_node="$(printf '%s' "$node_name" | tr -c 'A-Za-z0-9_.-' '-')"
+            runner_name="${GITLAB_GPU_RUNNER_NAME_PREFIX}-${safe_node}"
+
+            if ssh -F "$HA_OPENSTACK_SSH_CONFIG" "$target_ip" bash -s -- "$runner_name" <<'REMOTE'
+          set -euo pipefail
+          runner_name="$1"
+          if command -v gitlab-runner >/dev/null 2>&1 && sudo gitlab-runner list 2>&1 | grep -Fq "$runner_name"; then
+            exit 0
+          fi
+          exit 1
+          REMOTE
+            then
+              echo "GitLab runner already registered on ${node_name}: ${runner_name}"
+            else
+              echo "GitLab runner needs registration on ${node_name}: ${runner_name}"
+              needs_registration=true
+            fi
+          done < /tmp/gitlab-gpu-runner-inventory.tsv
+
+          echo "needs_registration=${needs_registration}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare GitLab GPU runner token
+        if: ${{ steps.gitlab_gpu_runner.outputs.enabled == 'true' && steps.gitlab_gpu_runner_plan.outputs.needs_registration == 'true' }}
+        run: |
+          runner_token_file="${RUNNER_TEMP}/gitlab-gpu-runner-token"
+          rm -f "$runner_token_file"
+
+          if [[ -n "${GITLAB_RUNNER_TOKEN:-}" ]]; then
+            echo "::add-mask::$GITLAB_RUNNER_TOKEN"
+            printf '%s' "$GITLAB_RUNNER_TOKEN" > "$runner_token_file"
+            chmod 600 "$runner_token_file"
+            echo "Using GITLAB_RUNNER_TOKEN secret override for GPU runner registration"
+            exit 0
+          fi
+
+          if [[ -z "${{ steps.gitlab_gpu_runner.outputs.GITLAB_TARGET_IP }}" ]]; then
+            echo "::error::Cannot auto-generate GitLab runner token because GitLab target IP is empty"
+            exit 1
+          fi
+
+          runner_token="$(
+            ssh -F "$HA_OPENSTACK_SSH_CONFIG" "${{ steps.gitlab_gpu_runner.outputs.GITLAB_TARGET_IP }}" bash -s -- \
+              "$GITLAB_GPU_RUNNER_NAME_PREFIX" \
+              "$GITLAB_GPU_RUNNER_TAGS" <<'REMOTE'
+          set -euo pipefail
+
+          runner_description="$1"
+          runner_tags="$2"
+          bootstrap_pat="$(python3 - <<'PY'
+          import secrets
+          import string
+
+          alphabet = string.ascii_letters + string.digits
+          print(''.join(secrets.choice(alphabet) for _ in range(20)))
+          PY
+          )"
+
+          create_pat_script="/tmp/hybrid-ai-create-runner-bootstrap-pat.rb"
+          revoke_pat_script="/tmp/hybrid-ai-revoke-runner-bootstrap-pat.rb"
+          response_file="$(mktemp)"
+
+          cleanup() {
+            sudo env HYBRID_AI_RUNNER_BOOTSTRAP_PAT="$bootstrap_pat" gitlab-rails runner "$revoke_pat_script" >/dev/null 2>&1 || true
+            rm -f "$response_file" "$create_pat_script" "$revoke_pat_script"
+          }
+          trap cleanup EXIT
+
+          cat > "$create_pat_script" <<'RUBY'
+          user = User.find_by_username('root') || abort('root user not found')
+          token = user.personal_access_tokens.create(
+            scopes: ['create_runner'],
+            name: "hybrid-ai-runner-bootstrap-#{Time.now.to_i}",
+            expires_at: 1.day.from_now
+          )
+          token.set_token(ENV.fetch('HYBRID_AI_RUNNER_BOOTSTRAP_PAT'))
+          token.save!
+          RUBY
+
+          cat > "$revoke_pat_script" <<'RUBY'
+          token = PersonalAccessToken.find_by_token(ENV.fetch('HYBRID_AI_RUNNER_BOOTSTRAP_PAT'))
+          token.revoke! if token && !token.revoked?
+          RUBY
+
+          sudo env HYBRID_AI_RUNNER_BOOTSTRAP_PAT="$bootstrap_pat" gitlab-rails runner "$create_pat_script" >/dev/null
+
+          status="$(curl -sS -o "$response_file" -w "%{http_code}" \
+            --request POST \
+            --url "http://127.0.0.1/api/v4/user/runners" \
+            --header "PRIVATE-TOKEN: ${bootstrap_pat}" \
+            --data-urlencode "runner_type=instance_type" \
+            --data-urlencode "description=${runner_description}" \
+            --data-urlencode "tag_list=${runner_tags}" \
+            --data-urlencode "run_untagged=false" \
+            --data-urlencode "locked=false")"
+
+          if [[ "$status" != "201" ]]; then
+            echo "GitLab runner token creation failed with HTTP ${status}" >&2
+            cat "$response_file" >&2
+            exit 1
+          fi
+
+          python3 - "$response_file" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], 'r', encoding='utf-8') as handle:
+              payload = json.load(handle)
+          token = payload.get('token', '')
+          if not token:
+              print('runner token missing from GitLab API response', file=sys.stderr)
+              sys.exit(1)
+          print(token)
+          PY
+          REMOTE
+          )"
+
+          if [[ -z "$runner_token" ]]; then
+            echo "::error::GitLab runner token auto-generation returned an empty token"
+            exit 1
+          fi
+
+          echo "::add-mask::$runner_token"
+          printf '%s' "$runner_token" > "$runner_token_file"
+          chmod 600 "$runner_token_file"
+          echo "Generated GitLab runner authentication token from GitLab VM"
+
+      - name: Install and register GitLab GPU runners
+        if: ${{ steps.gitlab_gpu_runner.outputs.enabled == 'true' }}
+        timeout-minutes: 40
+        run: |
+          echo "Registering GitLab shell runners on GPU workers..."
+          runner_token_file="${RUNNER_TEMP}/gitlab-gpu-runner-token"
+          {
+            echo "## GitLab GPU Runner"
+            echo
+            echo "| GPU node | Runner name | Result |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          while IFS=$'\t' read -r node_name target_ip; do
+            [[ -n "$node_name" && -n "$target_ip" ]] || continue
+            safe_node="$(printf '%s' "$node_name" | tr -c 'A-Za-z0-9_.-' '-')"
+            runner_name="${GITLAB_GPU_RUNNER_NAME_PREFIX}-${safe_node}"
+            token_file="/tmp/gitlab-runner-token-${safe_node}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+            echo "Installing GitLab Runner on ${node_name} (${target_ip})..."
+
+            if ssh -F "$HA_OPENSTACK_SSH_CONFIG" "$target_ip" bash -s -- "$runner_name" <<'REMOTE'
+          set -euo pipefail
+          runner_name="$1"
+          if command -v gitlab-runner >/dev/null 2>&1 && sudo gitlab-runner list 2>&1 | grep -Fq "$runner_name"; then
+            exit 0
+          fi
+          exit 1
+          REMOTE
+            then
+              echo "GitLab runner already registered: ${runner_name}"
+              printf "| \`%s\` | \`%s\` | \`%s\` |\n" "$node_name" "$runner_name" "already registered" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            if [[ ! -s "$runner_token_file" ]]; then
+              echo "::error::Missing prepared GitLab runner token file: ${runner_token_file}"
+              exit 1
+            fi
+
+            ssh -F "$HA_OPENSTACK_SSH_CONFIG" "$target_ip" \
+              "umask 077 && cat > ${token_file}" < "$runner_token_file"
+
+            ssh -F "$HA_OPENSTACK_SSH_CONFIG" "$target_ip" bash -s -- \
+              "$GITLAB_URL" \
+              "$runner_name" \
+              "$token_file" \
+              "${{ steps.gitlab_gpu_runner.outputs.NFS_SERVER_IP }}" <<'REMOTE'
+          set -euo pipefail
+
+          gitlab_url="$1"
+          runner_name="$2"
+          token_file="$3"
+          nfs_server_ip="$4"
+
+          cleanup() {
+            sudo rm -f "$token_file" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          wait_for_apt_locks() {
+            local deadline=$((SECONDS + 600))
+            local locks=(
+              /var/lib/dpkg/lock
+              /var/lib/dpkg/lock-frontend
+              /var/lib/apt/lists/lock
+              /var/cache/apt/archives/lock
+            )
+            while true; do
+              local busy=0
+              if command -v fuser >/dev/null 2>&1; then
+                for lock in "${locks[@]}"; do
+                  if sudo fuser "$lock" >/dev/null 2>&1; then
+                    busy=1
+                    break
+                  fi
+                done
+              fi
+              [[ "$busy" -eq 0 ]] && return 0
+              if (( SECONDS >= deadline )); then
+                echo "Timed out waiting for apt/dpkg locks" >&2
+                return 1
+              fi
+              sleep 5
+            done
+          }
+
+          sudo cloud-init status --wait >/dev/null 2>&1 || true
+
+          if ! command -v gitlab-runner >/dev/null 2>&1; then
+            wait_for_apt_locks
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ca-certificates curl
+            curl -fsSL \
+              https://packages.gitlab.com/install/repositories/runner/gitlab-runner/script.deb.sh \
+              -o /tmp/gitlab-runner-script.deb.sh
+            sudo bash /tmp/gitlab-runner-script.deb.sh
+            wait_for_apt_locks
+            sudo apt-get install -y -qq gitlab-runner
+          fi
+
+          for group in video render; do
+            if getent group "$group" >/dev/null 2>&1; then
+              sudo usermod -aG "$group" gitlab-runner || true
+            fi
+          done
+
+          if [[ -n "$nfs_server_ip" ]]; then
+            sudo mkdir -p /mnt/nfs/hybrid-ai
+            if ! findmnt -rno TARGET /mnt/nfs/hybrid-ai >/dev/null 2>&1; then
+              sudo mount -t nfs -o nfsvers=4.1,hard,intr "${nfs_server_ip}:/mnt/nfs/hybrid-ai" /mnt/nfs/hybrid-ai \
+                || sudo mount -t nfs "${nfs_server_ip}:/mnt/nfs/hybrid-ai" /mnt/nfs/hybrid-ai
+            fi
+            if ! grep -Fq "${nfs_server_ip}:/mnt/nfs/hybrid-ai /mnt/nfs/hybrid-ai" /etc/fstab; then
+              printf '%s /mnt/nfs/hybrid-ai nfs nfsvers=4.1,hard,intr,_netdev,nofail 0 0\n' "${nfs_server_ip}:/mnt/nfs/hybrid-ai" \
+                | sudo tee -a /etc/fstab >/dev/null
+            fi
+            sudo mkdir -p \
+              /mnt/nfs/hybrid-ai/pip-cache \
+              /mnt/nfs/hybrid-ai/checkpoints \
+              /mnt/nfs/hybrid-ai/artifacts \
+              /mnt/nfs/hybrid-ai/gitlab-runner-cache
+            sudo chmod 0777 \
+              /mnt/nfs/hybrid-ai/pip-cache \
+              /mnt/nfs/hybrid-ai/checkpoints \
+              /mnt/nfs/hybrid-ai/artifacts \
+              /mnt/nfs/hybrid-ai/gitlab-runner-cache
+          fi
+
+          runner_token="$(sudo cat "$token_file")"
+          if sudo gitlab-runner list 2>&1 | grep -Fq "$runner_name"; then
+            echo "GitLab runner already registered: $runner_name"
+          else
+            sudo gitlab-runner register \
+              --non-interactive \
+              --url "$gitlab_url" \
+              --token "$runner_token" \
+              --executor shell \
+              --name "$runner_name"
+          fi
+
+          sudo systemctl enable --now gitlab-runner
+          sudo gitlab-runner verify || true
+          if command -v nvidia-smi >/dev/null 2>&1; then
+            nvidia-smi
+          fi
+          REMOTE
+
+            printf "| \`%s\` | \`%s\` | \`%s\` |\n" "$node_name" "$runner_name" "registered" >> "$GITHUB_STEP_SUMMARY"
+          done < /tmp/gitlab-gpu-runner-inventory.tsv
+
+          echo "GitLab GPU runner setup complete"
+
+      - name: Cleanup GitLab runner sensitive files
+        if: always()
+        run: |
+          rm -f "$HA_OPENSTACK_SSH_KEY" "$HA_OPENSTACK_SSH_CONFIG" "${RUNNER_TEMP}/gitlab-gpu-runner-token"
+
   validate-gpu:
     name: Validate GPU Passthrough
-    runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER }}
+    runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER || 'private-cloud' }}
     needs: [bootstrap-k8s, setup-storage]
     if: ${{ always() && needs.bootstrap-k8s.result == 'success' && (!inputs.setup_storage || needs.setup-storage.result == 'success') && inputs.action == 'apply' && inputs.bootstrap_kubernetes && inputs.validate_gpu }}
     defaults:
@@ -1684,7 +2537,7 @@ jobs:
         working-directory: .
     env:
       KUBECONFIG: ${{ github.workspace }}/.ha/openstack/kubeconfig
-      HA_OPENSTACK_SSH_USER: ${{ vars.PRIVATE_CLOUD_SSH_USER }}
+      HA_OPENSTACK_SSH_USER: ${{ vars.PRIVATE_CLOUD_SSH_USER || 'ubuntu' }}
       HA_OPENSTACK_SSH_KEY: /tmp/private-cloud-gpu-ssh
       HA_OPENSTACK_SSH_CONFIG: ${{ github.workspace }}/.ha/openstack/gpu_ssh_config
       HA_KUBECTL_TUNNEL_PORT: "16443"

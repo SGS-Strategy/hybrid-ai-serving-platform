@@ -1320,7 +1320,7 @@ export HA_K8S_DASHBOARD_UPSTREAM="${HA_K8S_DASHBOARD_UPSTREAM:-127.0.0.1:18082}"
 export HA_GRAFANA_UPSTREAM="${HA_GRAFANA_UPSTREAM:-127.0.0.1:3000}"
 export HA_ARGOCD_UPSTREAM="${HA_ARGOCD_UPSTREAM:-127.0.0.1:8080}"
 export HA_CLOUDFLARE_DNS_TTL="${HA_CLOUDFLARE_DNS_TTL:-120}"
-export HA_DNS_SERVICES="${HA_DNS_SERVICES:-openstack,k8s,grafana,argocd}"
+export HA_DNS_SERVICES="${HA_DNS_SERVICES:-openstack,k8s,grafana,argocd,git}"
 # Cloudflare zone ID is not a secret. Put the API token in .env.secret.
 # export CLOUDFLARE_ZONE_ID=""
 

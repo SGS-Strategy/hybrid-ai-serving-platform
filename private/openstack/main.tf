@@ -8,9 +8,17 @@ locals {
   )
 
   cloud_init_common = {
-    install_node_dependencies = tostring(var.install_node_dependencies)
-    enable_gpu_bootstrap      = tostring(var.enable_gpu_bootstrap)
-    gpu_driver_autoinstall    = tostring(var.gpu_driver_autoinstall)
+    install_node_dependencies       = tostring(var.install_node_dependencies)
+    enable_gpu_bootstrap            = tostring(var.enable_gpu_bootstrap)
+    gpu_driver_autoinstall          = tostring(var.gpu_driver_autoinstall)
+    enable_gpu_cuda_bootstrap       = tostring(var.enable_gpu_cuda_bootstrap)
+    gpu_cuda_toolkit_package        = var.gpu_cuda_toolkit_package
+    gpu_cudnn_package               = var.gpu_cudnn_package
+    enable_gpu_training_bootstrap   = tostring(var.enable_gpu_training_bootstrap)
+    gpu_training_venv_path          = var.gpu_training_venv_path
+    gpu_training_pytorch_cuda_index = var.gpu_training_pytorch_cuda_index_url
+    gpu_training_pip_cache_dir      = var.gpu_training_pip_cache_dir
+    gpu_training_python_packages    = var.gpu_training_python_packages
   }
 }
 
@@ -229,6 +237,53 @@ resource "openstack_networking_floatingip_associate_v2" "gpu_worker" {
 
   floating_ip = openstack_networking_floatingip_v2.gpu_worker[count.index].address
   port_id     = openstack_networking_port_v2.gpu_worker[count.index].id
+
+  depends_on = [openstack_networking_router_interface_v2.private]
+}
+
+resource "openstack_networking_port_v2" "gitlab" {
+  count = var.gitlab_count
+
+  name               = format("%s-gitlab-%02d-port", var.project_name, count.index + 1)
+  network_id         = openstack_networking_network_v2.private.id
+  admin_state_up     = true
+  security_group_ids = [openstack_networking_secgroup_v2.private.id]
+
+  fixed_ip {
+    subnet_id = openstack_networking_subnet_v2.private.id
+  }
+}
+
+resource "openstack_compute_instance_v2" "gitlab" {
+  count = var.gitlab_count
+
+  name              = format("%s-gitlab-%02d", var.project_name, count.index + 1)
+  image_name        = var.gitlab_image_name
+  flavor_name       = var.gitlab_flavor_name
+  key_pair          = openstack_compute_keypair_v2.admin.name
+  availability_zone = var.availability_zone
+  user_data         = templatefile("${path.module}/cloud-init/base.yaml.tftpl", merge(local.cloud_init_common, { node_role = "gitlab" }))
+
+  metadata = merge(local.common_metadata, {
+    role = "gitlab"
+  })
+
+  network {
+    port = openstack_networking_port_v2.gitlab[count.index].id
+  }
+}
+
+resource "openstack_networking_floatingip_v2" "gitlab" {
+  count = var.assign_floating_ips ? var.gitlab_count : 0
+
+  pool = var.floating_ip_pool
+}
+
+resource "openstack_networking_floatingip_associate_v2" "gitlab" {
+  count = var.assign_floating_ips ? var.gitlab_count : 0
+
+  floating_ip = openstack_networking_floatingip_v2.gitlab[count.index].address
+  port_id     = openstack_networking_port_v2.gitlab[count.index].id
 
   depends_on = [openstack_networking_router_interface_v2.private]
 }

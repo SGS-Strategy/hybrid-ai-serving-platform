@@ -24,9 +24,11 @@ private/
 3. `bootstrap_kubernetes=true`이면 Terraform output node inventory 기준으로 kubeadm 기반 Kubernetes bootstrap을 진행합니다.
 4. `apply_kubernetes=true`이면 namespace, quota, RBAC, network policy baseline을 적용합니다.
 5. DNS는 foundation 생명주기와 같이 움직입니다. Plan은 dry-run, Apply는 Cloudflare upsert, Destroy는 Cloudflare delete를 실행합니다.
-6. `setup_storage=true`, `validate_gpu=true`는 실제 NFS/GPU backing 준비가 끝난 뒤 선택적으로 켭니다.
-7. 제거는 `Private Cloud Destroy` workflow로 실행합니다.
-8. `handoff/` 문서를 기준으로 model, public, hybrid, monitoring 담당자에게 필요한 값을 전달합니다.
+6. `setup_storage=true`이면 NFS, MinIO, PVC 기준을 적용합니다.
+7. GitLab VM에서 runner authentication token을 자동 생성하고 GPU worker VM에 GitLab shell runner를 등록합니다.
+8. `validate_gpu=true`는 실제 GPU backing 준비가 끝난 뒤 선택적으로 켭니다.
+9. 제거는 `Private Cloud Destroy` workflow로 실행합니다.
+10. `handoff/` 문서를 기준으로 model, public, hybrid, monitoring 담당자에게 필요한 값을 전달합니다.
 
 ## 로컬 실행
 
@@ -160,6 +162,7 @@ ha tf destroy
 | Kubernetes UI | `k8s.intp.me` | `127.0.0.1:18082` |
 | Grafana | `grafana.intp.me` | `127.0.0.1:3000` |
 | ArgoCD | `argocd.intp.me` | `127.0.0.1:8080` |
+| GitLab | `git.intp.me` | `127.0.0.1:18083` |
 
 설정 파일:
 
@@ -201,28 +204,38 @@ credential을 검증합니다.
 - `OPENSTACK_USER_DOMAIN_NAME`
 - `OPENSTACK_PROJECT_DOMAIN_NAME`
 - `OPENSTACK_REGION`
-- `CONTROL_PLANE_IMAGE_NAME`
-- `CONTROL_PLANE_FLAVOR_NAME`
-- `BUILD_WORKER_IMAGE_NAME`
-- `BUILD_WORKER_FLAVOR_NAME`
-- `GPU_WORKER_IMAGE_NAME`
-- `GPU_WORKER_FLAVOR_NAME`
-- `PRIVATE_CLOUD_RUNNER`
-- `TF_BACKEND_TYPE`
-- `PRIVATE_CLOUD_SSH_USER`
 
 선택 GitHub Secret:
 
 - `PRIVATE_CLOUD_TFVARS`: CIDR, external network ID, node count, metadata처럼 환경별로 달라지는 Terraform 값
 - `PRIVATE_CLOUD_SSH_PRIVATE_KEY`: Actions에서 dependency check와 Kubernetes bootstrap을 실행할 SSH private key
 - `PRIVATE_CLOUD_KUBECONFIG_B64`: `destroy` 전 Kubernetes resource cleanup이 필요할 때 사용할 kubeconfig base64 값
+- `MINIO_ROOT_PASSWORD`: MinIO root password를 직접 지정할 때 사용
+- `GITLAB_ROOT_PASSWORD`: GitLab `root` password를 직접 지정할 때 사용
+- `GITLAB_RUNNER_TOKEN`: 자동 생성 대신 기존 GitLab runner authentication token을 강제로 쓸 때만 사용
 
 선택 GitHub Variable:
 
+- `MINIO_ROOT_USER`: 기본 `minioadmin`
+- `CONTROL_PLANE_IMAGE_NAME`: 기본 `ubuntu-22.04`
+- `CONTROL_PLANE_FLAVOR_NAME`: 기본 `m1.medium`
+- `BUILD_WORKER_IMAGE_NAME`: 기본 `ubuntu-22.04`
+- `BUILD_WORKER_FLAVOR_NAME`: 기본 `m1.large`
+- `GPU_WORKER_IMAGE_NAME`: 기본 `ubuntu-22.04`
+- `GPU_WORKER_FLAVOR_NAME`: 기본 `g1.large`
+- `PRIVATE_CLOUD_RUNNER`: 기본 `private-cloud`
+- `TF_BACKEND_TYPE`: 기본 `local`
+- `PRIVATE_CLOUD_SSH_USER`: 기본 `ubuntu`
 - `PRIVATE_CLOUD_K8S_VERSION_MINOR`: Kubernetes apt repository minor, 기본 `v1.36`
 - `PRIVATE_CLOUD_K8S_POD_CIDR`: kubeadm과 CNI가 사용할 Pod CIDR, 기본 `192.168.0.0/16`
 - `PRIVATE_CLOUD_K8S_CNI_MANIFEST`: bootstrap 후 적용할 CNI manifest, 기본 Calico
 - `PRIVATE_CLOUD_K8S_API_ENDPOINT`: kubeconfig에 기록할 API endpoint, 기본 `PRIVATE_CLOUD_TAILSCALE_IP`
+- `GITLAB_DOMAIN`: 기본 `git.intp.me`
+- `GITLAB_EXTERNAL_URL`: 기본 `https://git.intp.me`
+- `GITLAB_SIGNUP_ENABLED`: 기본 `false`
+- `GITLAB_UPSTREAM_PORT`: 기본 `18083`
+- `GITLAB_GPU_RUNNER_NAME_PREFIX`: 기본 `hybrid-ai-gpu`
+- `GITLAB_GPU_RUNNER_TAGS`: 기본 `gpu-worker`
 
 DNS는 Plan/Apply/Destroy workflow 안에서 자동 실행됩니다.
 
@@ -244,3 +257,5 @@ DNS는 Plan/Apply/Destroy workflow 안에서 자동 실행됩니다.
 
 - `PRIVATE_CLOUD_DNS_TTL`
 - `PRIVATE_CLOUD_DNS_SERVICES`
+
+`PRIVATE_CLOUD_DNS_SERVICES`를 기존 값으로 유지해도 workflow가 `git`을 덧붙이므로 `git.intp.me` DNS가 같이 관리됩니다.

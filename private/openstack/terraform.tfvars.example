@@ -26,7 +26,34 @@ gpu_worker_count       = 1
 gpu_worker_image_name  = "ubuntu-22.04"
 gpu_worker_flavor_name = "g1.large"
 
+gitlab_count       = 1
+gitlab_image_name  = "ubuntu-22.04"
+gitlab_flavor_name = "m1.large"
+
 # Cloud-init installs common Kubernetes, storage, diagnostics, and GPU host dependencies.
 install_node_dependencies = true
 enable_gpu_bootstrap      = true
 gpu_driver_autoinstall    = true
+enable_gpu_cuda_bootstrap = true
+gpu_cuda_toolkit_package  = "cuda-toolkit-12-1"
+gpu_cudnn_package         = "cudnn9-cuda-12"
+
+# GPU workers also prepare a Python environment for the feature/model training code.
+enable_gpu_training_bootstrap        = true
+gpu_training_venv_path               = "/opt/hybrid-ai/training-venv"
+gpu_training_pytorch_cuda_index_url  = "https://download.pytorch.org/whl/cu121"
+gpu_training_pip_cache_dir           = "/mnt/nfs/hybrid-ai/pip-cache"
+gpu_training_python_packages = [
+  "torch==2.1.0+cu121",
+  "torchvision==0.16.0+cu121",
+  "torchaudio==2.1.0+cu121",
+  "numpy==1.26.4",
+  "pandas==2.2.2",
+  "scipy==1.11.4",
+  "scikit-learn==1.4.2",
+  "matplotlib==3.8.4",
+  "seaborn==0.13.2",
+  "notebook==7.2.2",
+  "ipykernel==6.29.5",
+  "minio==7.2.8",
+]

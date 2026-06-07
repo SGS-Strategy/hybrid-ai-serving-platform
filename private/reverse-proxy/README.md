@@ -23,6 +23,7 @@ flowchart LR
   K8S[Kubernetes dashboard or API UI<br/>127.0.0.1:18082]
   Grafana[Grafana<br/>127.0.0.1:3000]
   ArgoCD[ArgoCD<br/>127.0.0.1:8080]
+  GitLab[GitLab<br/>127.0.0.1:18083]
 
   Admin --> DNS
   DNS --> SSH
@@ -31,10 +32,12 @@ flowchart LR
   Admin -->|https k8s.intp.me| Caddy
   Admin -->|https grafana.intp.me| Caddy
   Admin -->|https argocd.intp.me| Caddy
+  Admin -->|https git.intp.me| Caddy
   Caddy --> Horizon
   Caddy --> K8S
   Caddy --> Grafana
   Caddy --> ArgoCD
+  Caddy --> GitLab
 ```
 
 ## DNS 레코드
@@ -49,6 +52,7 @@ Cloudflare record는 모두 DNS-only로 둡니다. Tailscale IP는 Cloudflare ed
 | `k8s.intp.me` | `CNAME` | `ssh.intp.me` | off |
 | `grafana.intp.me` | `CNAME` | `ssh.intp.me` | off |
 | `argocd.intp.me` | `CNAME` | `ssh.intp.me` | off |
+| `git.intp.me` | `CNAME` | `ssh.intp.me` | off |
 
 ## 로컬 환경 변수
 
@@ -62,7 +66,9 @@ HA_OPENSTACK_DOMAIN=openstack.intp.me
 HA_K8S_DOMAIN=k8s.intp.me
 HA_GRAFANA_DOMAIN=grafana.intp.me
 HA_ARGOCD_DOMAIN=argocd.intp.me
+HA_GIT_DOMAIN=git.intp.me
 HA_OPENSTACK_HORIZON_UPSTREAM=127.0.0.1:18081
+HA_GITLAB_UPSTREAM=127.0.0.1:18083
 CLOUDFLARE_API_TOKEN=...
 CLOUDFLARE_ZONE_ID=...
 ```
@@ -84,7 +90,7 @@ xcaddy build --with github.com/caddy-dns/cloudflare
 sudo install -m 755 caddy /usr/local/bin/caddy
 source .env
 source .env.secret
-sudo --preserve-env=HA_CADDY_ACME_EMAIL,HA_OPENSTACK_DOMAIN,HA_K8S_DOMAIN,HA_GRAFANA_DOMAIN,HA_ARGOCD_DOMAIN,HA_OPENSTACK_HORIZON_UPSTREAM,HA_K8S_DASHBOARD_UPSTREAM,HA_GRAFANA_UPSTREAM,HA_ARGOCD_UPSTREAM,CLOUDFLARE_API_TOKEN \
+sudo --preserve-env=HA_CADDY_ACME_EMAIL,HA_OPENSTACK_DOMAIN,HA_K8S_DOMAIN,HA_GRAFANA_DOMAIN,HA_ARGOCD_DOMAIN,HA_GIT_DOMAIN,HA_OPENSTACK_HORIZON_UPSTREAM,HA_K8S_DASHBOARD_UPSTREAM,HA_GRAFANA_UPSTREAM,HA_ARGOCD_UPSTREAM,HA_GITLAB_UPSTREAM,CLOUDFLARE_API_TOKEN \
   caddy run --config private/reverse-proxy/Caddyfile.cloudflare
 ```
 
@@ -124,7 +130,7 @@ Plan은 dry-run만 확인하고, Apply는 Cloudflare에 record를 upsert하며, 
 | 권한 | 필요한 이유 |
 | --- | --- |
 | `Zone:Read` | `intp.me` zone 접근 검증과 zone metadata 조회 |
-| `DNS:Edit` | `ssh`, `openstack`, `k8s`, `grafana`, `argocd` record 생성/수정 |
+| `DNS:Edit` | `ssh`, `openstack`, `k8s`, `grafana`, `argocd`, `git` record 생성/수정 |
 | `DNS:Edit` | Caddy DNS-01 인증서 발급 시 `_acme-challenge` TXT record 생성/삭제 |
 
 권한 생성 절차:
