@@ -30,7 +30,7 @@ spec:
                 - ALL
             readOnlyRootFilesystem: false
           env:
-            # Deploy workflow resolves MSK bootstrap brokers and injects them via the inference-config ConfigMap.
+            # Terraform provisions the shared inference-config ConfigMap from MSK outputs.
             - name: BOOTSTRAP_SERVERS
               valueFrom:
                 configMapKeyRef:

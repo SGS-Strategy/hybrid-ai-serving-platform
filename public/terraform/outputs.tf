@@ -52,7 +52,7 @@ output "aws_load_balancer_controller_role_arn" {
 }
 
 output "eks_bootstrap_admin_role_arn" {
-  description = "IAM role ARN used by SSM bootstrap jobs to access the EKS cluster as an admin"
+  description = "IAM role ARN used by bootstrap workflows to register the Argo CD root application"
   value       = aws_iam_role.eks_bootstrap_admin.arn
 }
 

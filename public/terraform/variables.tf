@@ -228,6 +228,12 @@ variable "edge_network_cidrs" {
 }
 
 # VPN 변수
+variable "argocd_chart_version" {
+  description = "Argo CD Helm chart version"
+  type        = string
+  default     = "7.8.23"
+}
+
 variable "enable_site_to_site_vpn" {
   description = "Whether to create the Site-to-Site VPN resources"
   type        = bool

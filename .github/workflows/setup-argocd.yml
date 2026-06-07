@@ -11,16 +11,15 @@ env:
   AWS_REGION: ap-northeast-2
   EKS_CLUSTER_NAME: sgs-hasp-eks
   ARGOCD_NAMESPACE: argocd
-  ARGOCD_CHART_VERSION: 7.8.23
   ARGOCD_REPO_URL: https://github.com/${{ github.repository }}.git
   ARGOCD_TARGET_REVISION: ${{ github.ref_name }}
   SSM_BOOTSTRAP_TAG_KEY: Name
   SSM_BOOTSTRAP_TAG_VALUE: sgs-hasp-system
-  SSM_WAIT_ATTEMPTS: 180
+  SSM_WAIT_ATTEMPTS: 60
   SSM_WAIT_INTERVAL_SECONDS: 10
 
 concurrency:
-  group: argocd-bootstrap-ssm-${{ github.ref }}
+  group: argocd-root-app-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -29,13 +28,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Validate required variables
-        run: |
-          if [[ -z "${SSM_BOOTSTRAP_TAG_KEY}" || -z "${SSM_BOOTSTRAP_TAG_VALUE}" ]]; then
-            echo "Bootstrap instance tag configuration is required."
-            exit 1
-          fi
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
@@ -50,9 +42,6 @@ jobs:
           echo "value=arn:aws:iam::${ACCOUNT_ID}:role/sgs-hasp-eks-bootstrap-admin" >> "$GITHUB_OUTPUT"
 
       - name: Build root application manifest
-        env:
-          REPO_URL: ${{ env.ARGOCD_REPO_URL }}
-          TARGET_REVISION: ${{ env.ARGOCD_TARGET_REVISION }}
         run: |
           cat > argocd-root-app.yaml <<EOF
           apiVersion: argoproj.io/v1alpha1
@@ -60,11 +49,13 @@ jobs:
           metadata:
             name: platform-addons
             namespace: ${ARGOCD_NAMESPACE}
+            finalizers:
+              - resources-finalizer.argocd.argoproj.io
           spec:
             project: default
             source:
-              repoURL: ${REPO_URL}
-              targetRevision: ${TARGET_REVISION}
+              repoURL: ${ARGOCD_REPO_URL}
+              targetRevision: ${ARGOCD_TARGET_REVISION}
               path: public/k8s/argocd/apps
             destination:
               server: https://kubernetes.default.svc
@@ -110,12 +101,10 @@ jobs:
           fi
 
           echo "value=${TARGET_INSTANCE_ID}" >> "$GITHUB_OUTPUT"
-          echo "Resolved bootstrap instance: ${TARGET_INSTANCE_ID}"
 
-      - name: Send bootstrap command through SSM
+      - name: Send root app bootstrap command through SSM
         id: send_bootstrap
         env:
-          GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN_FOR_ARGOCD: ${{ secrets.ARGOCD_GITHUB_TOKEN }}
           TARGET_INSTANCE_ID: ${{ steps.resolve_instance.outputs.value }}
@@ -130,40 +119,12 @@ jobs:
           repo_secret_name = f"repo-{os.environ['GITHUB_REPOSITORY'].replace('/', '-')}"
           commands = [
               "set -euo pipefail",
-              "echo '[1/19] Ensure kubectl is installed'",
-              "if ! command -v kubectl >/dev/null 2>&1; then curl -fsSLo /tmp/kubectl https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl && chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; fi",
-              "echo '[2/19] Ensure helm is installed'",
-              "if ! command -v helm >/dev/null 2>&1; then curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash; fi",
-              "echo '[3/19] Prepare kubeconfig path'",
-              "mkdir -p ~/.kube",
               "export KUBECONFIG=/tmp/eks-kubeconfig",
-              "echo '[4/19] Assume bootstrap admin role'",
-              f"ASSUME_ROLE_OUTPUT=$(aws sts assume-role --role-arn {os.environ['BOOTSTRAP_ROLE_ARN']} --role-session-name argocd-bootstrap --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)",
+              f"ASSUME_ROLE_OUTPUT=$(aws sts assume-role --role-arn {os.environ['BOOTSTRAP_ROLE_ARN']} --role-session-name argocd-root-app --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)",
               "if [ -z \"$ASSUME_ROLE_OUTPUT\" ] || [ \"$ASSUME_ROLE_OUTPUT\" = \"None\" ]; then echo 'Failed to assume bootstrap role.'; exit 1; fi",
               "read AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN <<< \"$ASSUME_ROLE_OUTPUT\"",
-              "if [ -z \"$AWS_ACCESS_KEY_ID\" ] || [ -z \"$AWS_SECRET_ACCESS_KEY\" ] || [ -z \"$AWS_SESSION_TOKEN\" ]; then echo 'Bootstrap role credentials are incomplete.'; exit 1; fi",
               "export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN",
-              "echo '[5/19] Verify assumed identity'",
-              "aws sts get-caller-identity",
-              "echo '[6/19] Verify EKS cluster access'",
-              f"aws eks describe-cluster --region {os.environ['AWS_REGION']} --name {os.environ['EKS_CLUSTER_NAME']} >/dev/null",
-              "echo '[7/19] Update kubeconfig'",
               f"aws eks update-kubeconfig --region {os.environ['AWS_REGION']} --name {os.environ['EKS_CLUSTER_NAME']} --kubeconfig /tmp/eks-kubeconfig",
-              "echo '[8/19] Verify kubectl context'",
-              "kubectl config current-context",
-              "kubectl cluster-info",
-              "echo '[9/19] Ensure Argo CD namespace exists'",
-              f"kubectl create namespace {os.environ['ARGOCD_NAMESPACE']} --dry-run=client -o yaml | kubectl apply -f -",
-              "echo '[10/19] Add and update Argo Helm repo'",
-              "helm repo add argo https://argoproj.github.io/argo-helm",
-              "helm repo update",
-              "echo '[11/19] Install or upgrade Argo CD'",
-              f"helm upgrade --install argocd argo/argo-cd --namespace {os.environ['ARGOCD_NAMESPACE']} --version {os.environ['ARGOCD_CHART_VERSION']}",
-              "echo '[12/19] Wait for Argo CD core components'",
-              f"kubectl rollout status deployment/argocd-server -n {os.environ['ARGOCD_NAMESPACE']} --timeout=300s",
-              f"kubectl rollout status deployment/argocd-repo-server -n {os.environ['ARGOCD_NAMESPACE']} --timeout=300s",
-              f"kubectl rollout status statefulset/argocd-application-controller -n {os.environ['ARGOCD_NAMESPACE']} --timeout=300s",
-              "echo '[13/19] Configure Argo CD repository secret when token is provided'",
               (
                   f"if [ -n \"{os.environ.get('GITHUB_TOKEN_FOR_ARGOCD', '')}\" ]; then "
                   f"kubectl -n {os.environ['ARGOCD_NAMESPACE']} create secret generic {repo_secret_name} "
@@ -174,23 +135,8 @@ jobs:
                   f"kubectl -n {os.environ['ARGOCD_NAMESPACE']} label secret {repo_secret_name} "
                   f"argocd.argoproj.io/secret-type=repository --overwrite; fi"
               ),
-              "echo '[14/19] Apply platform root application'",
               f"echo {os.environ['ROOT_APP_YAML_B64']} | base64 -d | kubectl apply -f -",
-              "echo '[15/19] Wait for platform-addons application to appear'",
-              f"for i in $(seq 1 30); do kubectl get application platform-addons -n {os.environ['ARGOCD_NAMESPACE']} >/dev/null 2>&1 && break; sleep 10; done",
-              f"kubectl get application platform-addons -n {os.environ['ARGOCD_NAMESPACE']}",
-              "echo '[16/19] Wait for aws-load-balancer-controller application to become Synced'",
-              f"alb_controller_ready=false; for i in $(seq 1 30); do sync_status=$(kubectl get application aws-load-balancer-controller -n {os.environ['ARGOCD_NAMESPACE']} -o jsonpath='{{.status.sync.status}}' 2>/dev/null || true); health_status=$(kubectl get application aws-load-balancer-controller -n {os.environ['ARGOCD_NAMESPACE']} -o jsonpath='{{.status.health.status}}' 2>/dev/null || true); echo \"aws-load-balancer-controller: sync=$sync_status health=$health_status attempt=$i\"; if [ \"$sync_status\" = \"Synced\" ]; then alb_controller_ready=true; break; fi; sleep 10; done; if [ \"$alb_controller_ready\" != \"true\" ]; then echo 'aws-load-balancer-controller application did not reach Synced state in time.'; kubectl get application aws-load-balancer-controller -n {os.environ['ARGOCD_NAMESPACE']} -o yaml || true; exit 1; fi",
-              f"kubectl get application aws-load-balancer-controller -n {os.environ['ARGOCD_NAMESPACE']} -o yaml",
-              "echo '[17/19] Wait for inference-api application to become Synced'",
-              f"inference_api_ready=false; for i in $(seq 1 30); do sync_status=$(kubectl get application inference-api -n {os.environ['ARGOCD_NAMESPACE']} -o jsonpath='{{.status.sync.status}}' 2>/dev/null || true); health_status=$(kubectl get application inference-api -n {os.environ['ARGOCD_NAMESPACE']} -o jsonpath='{{.status.health.status}}' 2>/dev/null || true); echo \"inference-api: sync=$sync_status health=$health_status attempt=$i\"; if [ \"$sync_status\" = \"Synced\" ]; then inference_api_ready=true; break; fi; sleep 10; done; if [ \"$inference_api_ready\" != \"true\" ]; then echo 'inference-api application did not reach Synced state in time.'; kubectl get application inference-api -n {os.environ['ARGOCD_NAMESPACE']} -o yaml || true; exit 1; fi",
-              f"kubectl get application inference-api -n {os.environ['ARGOCD_NAMESPACE']} -o yaml",
-              "echo '[18/19] Verify application deployments are available'",
-              "kubectl wait --for=condition=available deployment/aws-load-balancer-controller -n kube-system --timeout=600s",
-              "kubectl wait --for=condition=available deployment/inference-api -n inference --timeout=600s",
-              "echo '[19/19] Verify inference ingress exists'",
-              "for i in $(seq 1 30); do kubectl get ingress inference-api -n inference >/dev/null 2>&1 && break; sleep 10; done",
-              "kubectl get ingress inference-api -n inference",
+              f"kubectl get application platform-addons -n {os.environ['ARGOCD_NAMESPACE']} -o yaml",
           ]
 
           with open("commands.json", "w", encoding="utf-8") as fp:
@@ -201,13 +147,12 @@ jobs:
             --region "${AWS_REGION}" \
             --instance-ids "${TARGET_INSTANCE_ID}" \
             --document-name "AWS-RunShellScript" \
-            --comment "Bootstrap Argo CD on ${EKS_CLUSTER_NAME}" \
+            --comment "Register Argo CD root application on ${EKS_CLUSTER_NAME}" \
             --parameters file://commands.json \
             --query 'Command.CommandId' \
             --output text)
 
           echo "command_id=${COMMAND_ID}" >> "$GITHUB_OUTPUT"
-          echo "Sent SSM command: ${COMMAND_ID}"
 
       - name: Wait for bootstrap result
         env:
@@ -230,7 +175,6 @@ jobs:
             echo "Current SSM bootstrap status (${i}/${SSM_WAIT_ATTEMPTS}): ${STATUS}"
 
             if [[ "${STATUS}" == "Success" ]]; then
-              echo "Argo CD bootstrap completed successfully."
               break
             fi
 
@@ -263,18 +207,6 @@ jobs:
 
           if [[ "${FINAL_STATUS}" != "Success" ]]; then
             echo "SSM bootstrap did not finish successfully. Final status: ${FINAL_STATUS}"
-            aws ssm get-command-invocation \
-              --region "${AWS_REGION}" \
-              --command-id "${COMMAND_ID}" \
-              --instance-id "${TARGET_INSTANCE_ID}" \
-              --query 'StandardOutputContent' \
-              --output text || true
-            aws ssm get-command-invocation \
-              --region "${AWS_REGION}" \
-              --command-id "${COMMAND_ID}" \
-              --instance-id "${TARGET_INSTANCE_ID}" \
-              --query 'StandardErrorContent' \
-              --output text || true
             exit 1
           fi
 
