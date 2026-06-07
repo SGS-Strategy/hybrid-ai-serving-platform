@@ -2455,7 +2455,6 @@ jobs:
           root_password_file=""
           gitlab_image_archive_file=""
           gitlab_bootstrap_script="${GITHUB_WORKSPACE}/private/openstack/scripts/hybrid-ai-gitlab-bootstrap"
-          gitlab_bootstrap_script_file="/tmp/hybrid-ai-gitlab-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           if [[ ! -f "$gitlab_bootstrap_script" ]]; then
             echo "::error::Missing GitLab bootstrap script: ${gitlab_bootstrap_script}"
             exit 1
@@ -2480,9 +2479,9 @@ jobs:
             ssh -F "$HA_OPENSTACK_SSH_CONFIG" "${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}" \
               "chmod 600 ${gitlab_image_archive_file}"
           fi
-          scp -F "$HA_OPENSTACK_SSH_CONFIG" "$gitlab_bootstrap_script" "${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}:${gitlab_bootstrap_script_file}"
           ssh -F "$HA_OPENSTACK_SSH_CONFIG" "${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}" \
-            "chmod 600 ${gitlab_bootstrap_script_file}"
+            "sudo install -m 0755 -o root -g root /dev/stdin /usr/local/sbin/hybrid-ai-gitlab-bootstrap" \
+            < "$gitlab_bootstrap_script"
 
           ssh -F "$HA_OPENSTACK_SSH_CONFIG" "${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}" bash -s -- \
             "$GITLAB_EXTERNAL_URL" \
@@ -2494,8 +2493,7 @@ jobs:
             "$GITLAB_GPU_RUNNER_TAGS" \
             "$root_password_file" \
             "$gitlab_bootstrap_wait_seconds" \
-            "$gitlab_image_archive_file" \
-            "$gitlab_bootstrap_script_file" <<'REMOTE'
+            "$gitlab_image_archive_file" <<'REMOTE'
           set -euo pipefail
 
           external_url="$1"
@@ -2508,7 +2506,6 @@ jobs:
           root_password_file="${8:-}"
           gitlab_bootstrap_wait_seconds="${9:-3600}"
           gitlab_image_archive_source="${10:-}"
-          gitlab_bootstrap_script_source="${11:-}"
 
           cleanup() {
             if [[ -n "$root_password_file" ]]; then
@@ -2516,9 +2513,6 @@ jobs:
             fi
             if [[ -n "$gitlab_image_archive_source" ]]; then
               sudo rm -f "$gitlab_image_archive_source" >/dev/null 2>&1 || true
-            fi
-            if [[ -n "$gitlab_bootstrap_script_source" ]]; then
-              sudo rm -f "$gitlab_bootstrap_script_source" >/dev/null 2>&1 || true
             fi
           }
           trap cleanup EXIT
@@ -2555,12 +2549,6 @@ jobs:
           write_env_line GITLAB_BOOTSTRAP_WAIT_SECONDS "$gitlab_bootstrap_wait_seconds"
           sudo install -m 0644 -o root -g root "$env_file_tmp" /etc/hybrid-ai/gitlab-bootstrap.env
           rm -f "$env_file_tmp"
-
-          if [[ -z "$gitlab_bootstrap_script_source" || ! -s "$gitlab_bootstrap_script_source" ]]; then
-            echo "GitLab bootstrap script source is missing" >&2
-            exit 1
-          fi
-          sudo install -m 0755 -o root -g root "$gitlab_bootstrap_script_source" /usr/local/sbin/hybrid-ai-gitlab-bootstrap
 
           sudo tee /etc/systemd/system/hybrid-ai-gitlab-bootstrap.service >/dev/null <<'EOF'
           [Unit]
