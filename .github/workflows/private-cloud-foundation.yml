@@ -1953,7 +1953,7 @@ jobs:
     needs: terraform
     if: ${{ always() && needs.terraform.result == 'success' && inputs.action == 'apply' }}
     outputs:
-      ready: ${{ steps.install.outputs.ready || 'false' }}
+      ready: ${{ steps.gitlab_settings.outputs.ready || steps.install.outputs.ready || 'false' }}
     defaults:
       run:
         working-directory: private/openstack
@@ -2354,6 +2354,78 @@ jobs:
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "::notice::GitLab container started, but first boot is still running on the VM. Re-run apply after it becomes ready to register GPU runners."
+          fi
+
+      - name: Apply GitLab account settings
+        id: gitlab_settings
+        if: ${{ steps.gitlab.outputs.enabled == 'true' }}
+        timeout-minutes: 35
+        run: |
+          root_password_file=""
+          if [[ -n "${GITLAB_ROOT_PASSWORD:-}" ]]; then
+            root_password_file="/tmp/gitlab-root-password-settings-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            printf '%s' "$GITLAB_ROOT_PASSWORD" \
+              | ssh -F "$HA_OPENSTACK_SSH_CONFIG" "${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}" \
+                  "umask 077 && cat > ${root_password_file}"
+          fi
+
+          set +e
+          ssh -F "$HA_OPENSTACK_SSH_CONFIG" "${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}" bash -s -- \
+            "$GITLAB_SIGNUP_ENABLED" \
+            "$root_password_file" <<'REMOTE'
+          set -euo pipefail
+          gitlab_signup_enabled="$1"
+          root_password_file="${2:-}"
+
+          cleanup() {
+            if [[ -n "$root_password_file" ]]; then
+              sudo rm -f "$root_password_file" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          ready=false
+          for i in {1..90}; do
+            if sudo docker ps --format '{{.Names}}' | grep -qx gitlab \
+              && (curl -fsS http://127.0.0.1/users/sign_in >/dev/null 2>&1 || curl -fsS http://127.0.0.1/-/readiness >/dev/null 2>&1); then
+              ready=true
+              break
+            fi
+            echo "Waiting for GitLab before applying account settings... ($i/90)"
+            sleep 20
+          done
+
+          if [[ "$ready" != "true" ]]; then
+            echo "GitLab is still booting; account settings were not applied yet"
+            exit 2
+          fi
+
+          if [[ "$gitlab_signup_enabled" == "true" ]]; then
+            sudo docker exec gitlab gitlab-rails runner "::Gitlab::CurrentSettings.update!(signup_enabled: true)"
+          else
+            sudo docker exec gitlab gitlab-rails runner "::Gitlab::CurrentSettings.update!(signup_enabled: false)"
+          fi
+
+          if [[ -n "$root_password_file" && -s "$root_password_file" ]]; then
+            sudo docker exec -i gitlab gitlab-rails runner "password = STDIN.read.strip; user = User.find_by_username('root'); raise 'missing root user' unless user; user.password = password; user.password_confirmation = password; user.password_automatically_set = false if user.respond_to?(:password_automatically_set=); user.password_expires_at = nil if user.respond_to?(:password_expires_at=); user.unlock_access! if user.respond_to?(:unlock_access!) && user.access_locked?; user.save!" < "$root_password_file"
+            sudo docker exec -i gitlab gitlab-rails runner "password = STDIN.read.strip; user = User.find_by_username('root'); raise 'root password verification failed' unless user&.valid_password?(password)" < "$root_password_file"
+            echo "GitLab root password configured from GitHub Secret"
+          else
+            echo "GITLAB_ROOT_PASSWORD is empty; keeping GitLab generated initial root password"
+          fi
+          REMOTE
+          status=$?
+          set -e
+
+          if [[ "$status" -eq 0 ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            if [[ "$status" -eq 2 ]]; then
+              echo "::notice::GitLab is still booting; re-run apply after it becomes ready to apply root password and register runners"
+              exit 0
+            fi
+            exit "$status"
           fi
 
       - name: Configure GitLab reverse proxy upstream
