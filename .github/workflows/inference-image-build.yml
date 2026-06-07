@@ -23,7 +23,6 @@ jobs:
         service:
           - inference-api
           - inference-worker
-          - kserve-predictor
     steps:
       - name: Checkout
         uses: actions/checkout@v6
