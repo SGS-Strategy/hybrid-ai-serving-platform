@@ -9,6 +9,7 @@ locals {
 
   cloud_init_common = {
     install_node_dependencies       = tostring(var.install_node_dependencies)
+    gitlab_container_image          = var.gitlab_container_image
     enable_gpu_bootstrap            = tostring(var.enable_gpu_bootstrap)
     gpu_driver_autoinstall          = tostring(var.gpu_driver_autoinstall)
     enable_gpu_cuda_bootstrap       = tostring(var.enable_gpu_cuda_bootstrap)

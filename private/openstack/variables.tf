@@ -142,6 +142,12 @@ variable "gitlab_flavor_name" {
   default     = "m1.large"
 }
 
+variable "gitlab_container_image" {
+  description = "GitLab container image pre-pulled by the standalone GitLab VM cloud-init bootstrap."
+  type        = string
+  default     = "gitlab/gitlab-ce:18.11.4-ce.0"
+}
+
 variable "install_node_dependencies" {
   description = "Install common infrastructure node dependencies through cloud-init."
   type        = bool

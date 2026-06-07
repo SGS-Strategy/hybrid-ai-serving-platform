@@ -56,6 +56,7 @@ write_files:
     content: |
       node_role=${node_role}
       install_node_dependencies=${install_node_dependencies}
+      gitlab_container_image=${gitlab_container_image}
       enable_gpu_bootstrap=${enable_gpu_bootstrap}
       gpu_driver_autoinstall=${gpu_driver_autoinstall}
       enable_gpu_cuda_bootstrap=${enable_gpu_cuda_bootstrap}
@@ -100,6 +101,7 @@ write_files:
 
       role="$(cat /etc/hybrid-ai-node-role 2>/dev/null || printf unknown)"
       install_node_dependencies="${install_node_dependencies}"
+      gitlab_container_image="${gitlab_container_image}"
       enable_gpu_bootstrap="${enable_gpu_bootstrap}"
       enable_gpu_training_bootstrap="${enable_gpu_training_bootstrap}"
 
@@ -143,8 +145,94 @@ write_files:
         /usr/local/sbin/hybrid-ai-gpu-training-bootstrap || true
       fi
 
+      if [[ "$role" == "gitlab" ]]; then
+        GITLAB_CONTAINER_IMAGE="$gitlab_container_image" /usr/local/sbin/hybrid-ai-gitlab-prereq-bootstrap || true
+      fi
+
       /usr/local/sbin/hybrid-ai-dependency-check
       printf 'hybrid-ai node bootstrap complete role=%s\n' "$role"
+  - path: /usr/local/sbin/hybrid-ai-gitlab-prereq-bootstrap
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      exec > >(tee -a /var/log/hybrid-ai-gitlab-prereq-bootstrap.log) 2>&1
+
+      image="$${GITLAB_CONTAINER_IMAGE:-gitlab/gitlab-ce:18.11.4-ce.0}"
+      archive="$${GITLAB_CONTAINER_IMAGE_ARCHIVE:-/var/cache/hybrid-ai/container-images/gitlab-image.tar}"
+
+      wait_for_apt_locks() {
+        local deadline=$((SECONDS + 900))
+        local locks=(
+          /var/lib/dpkg/lock
+          /var/lib/dpkg/lock-frontend
+          /var/lib/apt/lists/lock
+          /var/cache/apt/archives/lock
+        )
+        while true; do
+          local busy=0
+          if command -v fuser >/dev/null 2>&1; then
+            for lock in "$${locks[@]}"; do
+              if fuser "$lock" >/dev/null 2>&1; then
+                busy=1
+                break
+              fi
+            done
+          fi
+          [[ "$busy" -eq 0 ]] && return 0
+          if (( SECONDS >= deadline )); then
+            printf 'Timed out waiting for apt/dpkg locks\n' >&2
+            return 1
+          fi
+          sleep 5
+        done
+      }
+
+      load_image_archive() {
+        local output=""
+        local loaded_ref=""
+        local loaded_id=""
+
+        [[ -n "$archive" && -s "$archive" ]] || return 1
+        printf 'loading GitLab image archive: %s\n' "$archive"
+        if ! output="$(docker load -i "$archive" 2>&1)"; then
+          printf '%s\n' "$output" >&2
+          return 1
+        fi
+        printf '%s\n' "$output"
+        if docker image inspect "$image" >/dev/null 2>&1; then
+          return 0
+        fi
+        loaded_ref="$(printf '%s\n' "$output" | sed -n 's/^Loaded image: //p' | tail -n 1)"
+        loaded_id="$(printf '%s\n' "$output" | sed -n 's/^Loaded image ID: //p' | tail -n 1)"
+        if [[ -n "$loaded_ref" ]]; then
+          docker tag "$loaded_ref" "$image" >/dev/null 2>&1 || true
+        fi
+        if ! docker image inspect "$image" >/dev/null 2>&1 && [[ -n "$loaded_id" ]]; then
+          docker tag "$loaded_id" "$image" >/dev/null 2>&1 || true
+        fi
+        docker image inspect "$image" >/dev/null 2>&1
+      }
+
+      printf 'hybrid-ai GitLab prereq bootstrap start image=%s\n' "$image"
+      export DEBIAN_FRONTEND=noninteractive
+      export NEEDRESTART_MODE=a
+      cat >/etc/apt/apt.conf.d/99hybrid-ai-force-ipv4 <<'EOF'
+      Acquire::ForceIPv4 "true";
+      Acquire::Retries "5";
+      Dpkg::Lock::Timeout "900";
+      EOF
+      wait_for_apt_locks
+      apt-get -o Acquire::ForceIPv4=true -o Acquire::Retries=5 -o Dpkg::Lock::Timeout=900 update -qq
+      apt-get -o Acquire::ForceIPv4=true -o Acquire::Retries=5 -o Dpkg::Lock::Timeout=900 install -y -qq ca-certificates curl docker.io openssh-server python3 tzdata
+      systemctl enable --now docker
+      if [[ -n "$image" ]]; then
+        if ! load_image_archive; then
+          docker pull "$image"
+        fi
+      fi
+      printf 'hybrid-ai GitLab prereq bootstrap complete\n'
   - path: /usr/local/sbin/hybrid-ai-gpu-bootstrap
     permissions: "0755"
     content: |
