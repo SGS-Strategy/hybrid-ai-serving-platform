@@ -15,7 +15,7 @@
 | Future Kubernetes UI | `k8s.intp.me` | Kubernetes 관리자 UI 예약 | Dashboard/API UI 설치 후 upstream 연결 |
 | Future Grafana | `grafana.intp.me` | Monitoring UI 예약 | Monitoring stack 설치 후 upstream 연결 |
 | Future ArgoCD | `argocd.intp.me` | GitOps UI 예약 | ArgoCD 설치 후 upstream 연결 |
-| GitLab | `https://git.intp.me` | Git repository, CI/CD, GPU runner 관리 | Cloudflare DNS-only + Caddy reverse proxy |
+| GitLab | `https://gitlab.intp.me` | Git repository, CI/CD, GPU runner 관리 | Cloudflare DNS-only + Caddy reverse proxy |
 | OpenStack CLI/API | `source .ha/openstack-local/openrc.sh` | VM, 네트워크, 이미지, 보안그룹 확인 | `openstack server list` 등 |
 | Kubernetes Admin | OpenStack VM SSH 접속 | Kubernetes cluster 관리 | `ubuntu@<CONTROL_PLANE_FLOATING_IP>` via LXD proxy |
 | Kubernetes kubectl | VM 내부 | Kubernetes node, pod, namespace 확인 | `sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf ...` |

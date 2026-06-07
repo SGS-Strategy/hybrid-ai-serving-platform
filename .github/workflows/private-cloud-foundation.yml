@@ -67,7 +67,7 @@ env:
   PRIVATE_CLOUD_BASE_DOMAIN: ${{ vars.PRIVATE_CLOUD_BASE_DOMAIN }}
   PRIVATE_CLOUD_TAILSCALE_IP: ${{ vars.PRIVATE_CLOUD_TAILSCALE_IP }}
   PRIVATE_CLOUD_DNS_TTL: ${{ vars.PRIVATE_CLOUD_DNS_TTL }}
-  PRIVATE_CLOUD_DNS_SERVICES: ${{ vars.PRIVATE_CLOUD_DNS_SERVICES && format('{0},git', vars.PRIVATE_CLOUD_DNS_SERVICES) || 'openstack,k8s,grafana,argocd,git' }}
+  PRIVATE_CLOUD_DNS_SERVICES: ${{ vars.PRIVATE_CLOUD_DNS_SERVICES && format('{0},gitlab', vars.PRIVATE_CLOUD_DNS_SERVICES) || 'openstack,k8s,grafana,argocd,gitlab' }}
   # Terraform backend
   TF_BACKEND_CONFIG: ${{ secrets.TF_BACKEND_CONFIG }}
   TF_BACKEND_TYPE: ${{ vars.TF_BACKEND_TYPE || 'local' }}
@@ -965,6 +965,97 @@ jobs:
           fi
           echo "DevStack is ready at http://${IP}/identity/v3"
 
+      - name: Ensure DevStack public egress
+        if: inputs.action != 'destroy'
+        run: |
+          lxc exec ha-openstack -- sudo -u stack -H bash -s <<'LOOKUP_PUBLIC_EGRESS' > /tmp/ha-devstack-public-egress.env
+          set -eo pipefail
+          cd /opt/stack/devstack
+          source openrc admin admin >/dev/null
+          set -u
+
+          public_subnet_id="$(openstack subnet list --network public --ip-version 4 -f value -c ID | head -n 1)"
+          if [[ -z "$public_subnet_id" ]]; then
+            echo "missing_public_subnet=true"
+            exit 0
+          fi
+
+          public_cidr="$(openstack subnet show "$public_subnet_id" -f value -c cidr)"
+          public_gateway="$(openstack subnet show "$public_subnet_id" -f value -c gateway_ip)"
+          if [[ -z "$public_cidr" || -z "$public_gateway" || "$public_gateway" == "None" ]]; then
+            echo "missing_public_subnet=true"
+            exit 0
+          fi
+
+          prefix="${public_cidr#*/}"
+          printf 'public_cidr=%s\n' "$public_cidr"
+          printf 'public_gateway=%s\n' "$public_gateway"
+          printf 'public_gateway_cidr=%s/%s\n' "$public_gateway" "$prefix"
+          LOOKUP_PUBLIC_EGRESS
+
+          # shellcheck disable=SC1091
+          source /tmp/ha-devstack-public-egress.env
+          if [[ "${missing_public_subnet:-false}" == "true" ]]; then
+            echo "::warning::Could not find DevStack public IPv4 subnet; skipping public egress setup"
+            exit 0
+          fi
+
+          lxc exec ha-openstack -- bash -s -- \
+            "$public_cidr" \
+            "$public_gateway_cidr" <<'ENSURE_PUBLIC_EGRESS'
+          set -euo pipefail
+          public_cidr="$1"
+          public_gateway_cidr="$2"
+
+          ensure_public_egress() {
+            ip link set br-ex up
+            if ! ip -4 addr show br-ex | grep -Fqw "$public_gateway_cidr"; then
+              ip addr add "$public_gateway_cidr" dev br-ex
+            fi
+            sysctl -w net.ipv4.ip_forward=1 >/dev/null
+            if ! iptables -t nat -C POSTROUTING -s "$public_cidr" ! -d "$public_cidr" -j MASQUERADE >/dev/null 2>&1; then
+              iptables -t nat -A POSTROUTING -s "$public_cidr" ! -d "$public_cidr" -j MASQUERADE
+            fi
+          }
+
+          ensure_public_egress
+
+          install -d -m 0755 /usr/local/sbin
+          cat >/usr/local/sbin/ha-devstack-public-egress <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          ip link set br-ex up
+          if ! ip -4 addr show br-ex | grep -Fqw "$public_gateway_cidr"; then
+            ip addr add "$public_gateway_cidr" dev br-ex
+          fi
+          sysctl -w net.ipv4.ip_forward=1 >/dev/null
+          if ! iptables -t nat -C POSTROUTING -s "$public_cidr" ! -d "$public_cidr" -j MASQUERADE >/dev/null 2>&1; then
+            iptables -t nat -A POSTROUTING -s "$public_cidr" ! -d "$public_cidr" -j MASQUERADE
+          fi
+          EOF
+          chmod 0755 /usr/local/sbin/ha-devstack-public-egress
+
+          cat >/etc/systemd/system/ha-devstack-public-egress.service <<'EOF'
+          [Unit]
+          Description=Hybrid AI DevStack public bridge egress
+          After=openvswitch-switch.service network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/ha-devstack-public-egress
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          systemctl daemon-reload
+          systemctl enable --now ha-devstack-public-egress.service >/dev/null
+
+          ip -4 addr show br-ex
+          iptables -t nat -S POSTROUTING
+          ENSURE_PUBLIC_EGRESS
+
       - name: Ensure proxy device
         if: always()
         run: |
@@ -1168,10 +1259,19 @@ jobs:
           if [[ "${INSTALL_OPENSTACK}" == "true" ]]; then
             public_network_id=$(lxc exec ha-openstack -- sudo -u stack -H bash -lc \
               'cd /opt/stack/devstack && source openrc admin admin >/dev/null && openstack network show public -f value -c id')
+            public_subnet_id=$(lxc exec ha-openstack -- sudo -u stack -H bash -lc \
+              'cd /opt/stack/devstack && source openrc admin admin >/dev/null && openstack subnet list --network public --ip-version 4 -f value -c ID | head -n 1')
+            if [[ -z "$public_subnet_id" ]]; then
+              echo "::error::DevStack public network has no IPv4 subnet"
+              exit 1
+            fi
+            public_subnet_cidr=$(lxc exec ha-openstack -- sudo -u stack -H bash -lc \
+              "cd /opt/stack/devstack && source openrc admin admin >/dev/null && openstack subnet show '${public_subnet_id}' -f value -c cidr")
             {
               printf 'external_network_id = "%s"\n' "$public_network_id"
               printf 'floating_ip_pool = "public"\n'
               printf 'assign_floating_ips = true\n'
+              printf 'gitlab_http_allowed_cidrs = ["%s"]\n' "$public_subnet_cidr"
               printf 'control_plane_image_name = "%s"\n' "${TF_VAR_control_plane_image_name}"
               printf 'control_plane_flavor_name = "%s"\n' "${HA_DEVSTACK_CONTROL_FLAVOR_NAME}"
               printf 'build_worker_image_name = "%s"\n' "${TF_VAR_build_worker_image_name}"
@@ -1629,14 +1729,16 @@ jobs:
     runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER || 'private-cloud' }}
     needs: terraform
     if: ${{ always() && needs.terraform.result == 'success' && inputs.action == 'apply' }}
+    outputs:
+      ready: ${{ steps.install.outputs.ready || 'false' }}
     defaults:
       run:
         working-directory: private/openstack
     env:
       GITLAB_INSTALL_ENABLED: ${{ vars.GITLAB_INSTALL_ENABLED || 'true' }}
-      GITLAB_DOMAIN: ${{ vars.GITLAB_DOMAIN || 'git.intp.me' }}
-      GITLAB_EXTERNAL_URL: ${{ vars.GITLAB_EXTERNAL_URL || 'https://git.intp.me' }}
-      GITLAB_PACKAGE: ${{ vars.GITLAB_PACKAGE || 'gitlab-ce' }}
+      GITLAB_DOMAIN: ${{ vars.GITLAB_DOMAIN || 'gitlab.intp.me' }}
+      GITLAB_EXTERNAL_URL: ${{ vars.GITLAB_EXTERNAL_URL || 'https://gitlab.intp.me' }}
+      GITLAB_IMAGE: ${{ vars.GITLAB_IMAGE || 'gitlab/gitlab-ce:latest' }}
       GITLAB_ROOT_PASSWORD: ${{ secrets.GITLAB_ROOT_PASSWORD }}
       GITLAB_SIGNUP_ENABLED: ${{ vars.GITLAB_SIGNUP_ENABLED || 'false' }}
       GITLAB_UPSTREAM_PORT: ${{ vars.GITLAB_UPSTREAM_PORT || '18083' }}
@@ -1760,9 +1862,76 @@ jobs:
 
           echo "enabled=true" >> "$GITHUB_OUTPUT"
 
-      - name: Install GitLab CE
+      - name: Wait for GitLab VM SSH and egress
         if: ${{ steps.gitlab.outputs.enabled == 'true' }}
-        timeout-minutes: 70
+        run: |
+          repair_local_devstack_egress() {
+            [[ "${INSTALL_OPENSTACK}" == "true" ]] || return 0
+            lxc info ha-openstack >/dev/null 2>&1 || return 0
+
+            lxc exec ha-openstack -- sudo -u stack -H bash -s <<'LOOKUP_PUBLIC_EGRESS' > /tmp/ha-devstack-public-egress.env
+          set -eo pipefail
+          cd /opt/stack/devstack
+          source openrc admin admin >/dev/null
+          set -u
+          public_subnet_id="$(openstack subnet list --network public --ip-version 4 -f value -c ID | head -n 1)"
+          [[ -n "$public_subnet_id" ]] || exit 0
+          public_cidr="$(openstack subnet show "$public_subnet_id" -f value -c cidr)"
+          public_gateway="$(openstack subnet show "$public_subnet_id" -f value -c gateway_ip)"
+          [[ -n "$public_cidr" && -n "$public_gateway" && "$public_gateway" != "None" ]] || exit 0
+          prefix="${public_cidr#*/}"
+          printf 'public_cidr=%s\n' "$public_cidr"
+          printf 'public_gateway_cidr=%s/%s\n' "$public_gateway" "$prefix"
+          LOOKUP_PUBLIC_EGRESS
+
+            # shellcheck disable=SC1091
+            source /tmp/ha-devstack-public-egress.env || return 0
+            [[ -n "${public_cidr:-}" && -n "${public_gateway_cidr:-}" ]] || return 0
+            lxc exec ha-openstack -- bash -s -- "$public_cidr" "$public_gateway_cidr" <<'ENSURE_PUBLIC_EGRESS'
+          set -euo pipefail
+          public_cidr="$1"
+          public_gateway_cidr="$2"
+          ip link set br-ex up
+          if ! ip -4 addr show br-ex | grep -Fqw "$public_gateway_cidr"; then
+            ip addr add "$public_gateway_cidr" dev br-ex
+          fi
+          sysctl -w net.ipv4.ip_forward=1 >/dev/null
+          if ! iptables -t nat -C POSTROUTING -s "$public_cidr" ! -d "$public_cidr" -j MASQUERADE >/dev/null 2>&1; then
+            iptables -t nat -A POSTROUTING -s "$public_cidr" ! -d "$public_cidr" -j MASQUERADE
+          fi
+          ENSURE_PUBLIC_EGRESS
+          }
+
+          target="${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}"
+          registry_host="registry-1.docker.io"
+          if [[ "${GITLAB_IMAGE}" == */*/* ]]; then
+            registry_host="${GITLAB_IMAGE%%/*}"
+          fi
+          repair_local_devstack_egress
+
+          for i in {1..90}; do
+            if ssh -o ConnectTimeout=10 -F "$HA_OPENSTACK_SSH_CONFIG" "$target" \
+              "getent ahostsv4 archive.ubuntu.com >/dev/null \
+                && curl -4 -fsSI --max-time 15 http://archive.ubuntu.com/ubuntu/ >/dev/null \
+                && curl -4 -sSI --max-time 15 https://${registry_host}/v2/ >/dev/null"; then
+              echo "GitLab VM SSH, apt egress, and container registry egress are ready"
+              exit 0
+            fi
+
+            if (( i % 6 == 0 )); then
+              repair_local_devstack_egress
+            fi
+            echo "Waiting for GitLab VM SSH, apt egress, and container registry egress... ($i/90)"
+            sleep 10
+          done
+
+          echo "::error::GitLab VM did not become reachable with working apt/container registry egress"
+          exit 1
+
+      - name: Install GitLab
+        id: install
+        if: ${{ steps.gitlab.outputs.enabled == 'true' }}
+        timeout-minutes: 120
         run: |
           root_password_file=""
           if [[ -n "${GITLAB_ROOT_PASSWORD:-}" ]]; then
@@ -1775,16 +1944,18 @@ jobs:
           ssh -F "$HA_OPENSTACK_SSH_CONFIG" "${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}" bash -s -- \
             "$GITLAB_EXTERNAL_URL" \
             "$GITLAB_DOMAIN" \
-            "$GITLAB_PACKAGE" \
+            "$GITLAB_IMAGE" \
             "$GITLAB_SIGNUP_ENABLED" \
             "$root_password_file" <<'REMOTE'
           set -euo pipefail
 
           external_url="$1"
           gitlab_domain="$2"
-          gitlab_package="$3"
+          gitlab_image="$3"
           gitlab_signup_enabled="$4"
-          root_password_file="$5"
+          root_password_file="${5:-}"
+          export DEBIAN_FRONTEND=noninteractive
+          export NEEDRESTART_MODE=a
 
           cleanup() {
             if [[ -n "$root_password_file" ]]; then
@@ -1820,84 +1991,147 @@ jobs:
             done
           }
 
+          wait_for_install_egress() {
+            local deadline=$((SECONDS + 900))
+            local registry_host="registry-1.docker.io"
+            if [[ "$gitlab_image" == */*/* ]]; then
+              registry_host="${gitlab_image%%/*}"
+            fi
+
+            while true; do
+              if getent ahostsv4 archive.ubuntu.com >/dev/null 2>&1 \
+                && curl -4 -fsSI --max-time 15 http://archive.ubuntu.com/ubuntu/ >/dev/null 2>&1 \
+                && curl -4 -sSI --max-time 15 "https://${registry_host}/v2/" >/dev/null 2>&1; then
+                return 0
+              fi
+              if (( SECONDS >= deadline )); then
+                echo "Timed out waiting for apt/container registry egress" >&2
+                return 1
+              fi
+              sleep 10
+            done
+          }
+
           sudo cloud-init status --wait >/dev/null 2>&1 || true
           sudo hostnamectl set-hostname "$gitlab_domain" || true
 
+          sudo tee /etc/apt/apt.conf.d/99hybrid-ai-force-ipv4 >/dev/null <<'EOF'
+          Acquire::ForceIPv4 "true";
+          Acquire::Retries "5";
+          Dpkg::Lock::Timeout "900";
+          EOF
+
+          apt_get_common=(
+            -o Acquire::ForceIPv4=true
+            -o Acquire::Retries=5
+            -o Dpkg::Lock::Timeout=900
+          )
+
+          wait_for_install_egress
           wait_for_apt_locks
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ca-certificates curl openssh-server tzdata perl
+          sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get "${apt_get_common[@]}" update -qq
+          sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get "${apt_get_common[@]}" install -y -qq ca-certificates curl docker.io openssh-server tzdata
+          sudo systemctl enable --now docker
 
-          if ! dpkg-query -W "$gitlab_package" >/dev/null 2>&1; then
-            case "$gitlab_package" in
-              gitlab-ce) repo_path="gitlab/gitlab-ce" ;;
-              gitlab-ee) repo_path="gitlab/gitlab-ee" ;;
-              *) echo "unsupported GitLab package: $gitlab_package" >&2; exit 1 ;;
-            esac
-            curl -fsSL \
-              "https://packages.gitlab.com/install/repositories/${repo_path}/script.deb.sh" \
-              -o /tmp/gitlab-package-repository.deb.sh
-            sudo bash /tmp/gitlab-package-repository.deb.sh
-            wait_for_apt_locks
-            sudo EXTERNAL_URL="$external_url" apt-get install -y -qq "$gitlab_package"
-          fi
+          for package in gitlab-ce gitlab-ee; do
+            status="$(dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null || true)"
+            if [[ -n "$status" && "$status" != "ii " ]]; then
+              sudo dpkg --remove --force-remove-reinstreq "$package" >/dev/null 2>&1 || true
+            fi
+          done
+          sudo rm -rf /opt/gitlab /etc/gitlab /var/opt/gitlab /var/log/gitlab
 
-          sudo python3 - "$external_url" <<'PY'
-          import sys
-          from pathlib import Path
-
-          external_url = sys.argv[1]
-          path = Path("/etc/gitlab/gitlab.rb")
-          content = path.read_text(encoding="utf-8") if path.exists() else ""
-          begin = "# BEGIN hybrid-ai GitLab settings"
-          end = "# END hybrid-ai GitLab settings"
-          if begin in content and end in content:
-              before, rest = content.split(begin, 1)
-              _, after = rest.split(end, 1)
-              content = before + after.lstrip("\n")
-          block = f"""
-          {begin}
-          external_url {external_url!r}
+          sudo install -d -m 0755 /srv/gitlab/config /srv/gitlab/logs /srv/gitlab/data
+          sudo tee /srv/gitlab/config/omnibus_config.rb >/dev/null <<EOF
+          external_url '${external_url}'
           letsencrypt['enable'] = false
           nginx['listen_port'] = 80
           nginx['listen_https'] = false
-          gitlab_rails['gitlab_shell_ssh_port'] = 22
-          nginx['proxy_set_headers'] = {{
-            "Host" => "$http_host",
-            "X-Real-IP" => "$remote_addr",
-            "X-Forwarded-For" => "$proxy_add_x_forwarded_for",
+          gitlab_rails['gitlab_shell_ssh_port'] = 2222
+          gitlab_rails['usage_ping_enabled'] = false
+          gitlab_rails['time_zone'] = 'UTC'
+          puma['worker_processes'] = 0
+          sidekiq['max_concurrency'] = 5
+          prometheus_monitoring['enable'] = false
+          prometheus['enable'] = false
+          alertmanager['enable'] = false
+          node_exporter['enable'] = false
+          redis_exporter['enable'] = false
+          postgres_exporter['enable'] = false
+          gitlab_exporter['enable'] = false
+          gitlab_kas['enable'] = false
+          registry['enable'] = false
+          gitlab_pages['enable'] = false
+          nginx['proxy_set_headers'] = {
+            "Host" => "\$http_host",
+            "X-Real-IP" => "\$remote_addr",
+            "X-Forwarded-For" => "\$proxy_add_x_forwarded_for",
             "X-Forwarded-Proto" => "https",
             "X-Forwarded-Ssl" => "on",
             "X-Forwarded-Port" => "443"
-          }}
-          {end}
-          """
-          path.write_text(content.rstrip() + "\n" + block.lstrip(), encoding="utf-8")
-          PY
+          }
+          EOF
 
-          sudo gitlab-ctl reconfigure
+          sudo docker rm -f gitlab >/dev/null 2>&1 || true
+          sudo docker pull "$gitlab_image"
+          sudo docker run --detach \
+            --hostname "$gitlab_domain" \
+            --env GITLAB_OMNIBUS_CONFIG="from_file('/etc/gitlab/omnibus_config.rb')" \
+            --publish 80:80 \
+            --publish 2222:22 \
+            --name gitlab \
+            --restart unless-stopped \
+            --volume /srv/gitlab/config:/etc/gitlab \
+            --volume /srv/gitlab/logs:/var/log/gitlab \
+            --volume /srv/gitlab/data:/var/opt/gitlab \
+            --shm-size 256m \
+            "$gitlab_image"
+
+          ready=false
+          for i in {1..30}; do
+            if ! sudo docker ps --format '{{.Names}}' | grep -qx gitlab; then
+              sudo docker logs --tail 200 gitlab >&2 || true
+              echo "GitLab container is not running" >&2
+              exit 1
+            fi
+            if curl -fsS http://127.0.0.1/-/readiness >/dev/null 2>&1 || curl -fsS http://127.0.0.1/users/sign_in >/dev/null 2>&1; then
+              echo "GitLab is responding locally"
+              ready=true
+              break
+            fi
+            if (( i % 6 == 0 )); then
+              sudo docker logs --tail 80 gitlab || true
+            fi
+            echo "Waiting for GitLab web readiness... ($i/30)"
+            sleep 10
+          done
+
+          if [[ "$ready" != "true" ]]; then
+            echo "GitLab container is still booting in the background"
+            sudo docker ps --filter name=gitlab --format 'name={{.Names}} status={{.Status}} image={{.Image}}'
+            exit 0
+          fi
 
           if [[ "$gitlab_signup_enabled" == "true" ]]; then
-            sudo gitlab-rails runner "::Gitlab::CurrentSettings.update!(signup_enabled: true)"
+            sudo docker exec gitlab gitlab-rails runner "::Gitlab::CurrentSettings.update!(signup_enabled: true)"
           else
-            sudo gitlab-rails runner "::Gitlab::CurrentSettings.update!(signup_enabled: false)"
+            sudo docker exec gitlab gitlab-rails runner "::Gitlab::CurrentSettings.update!(signup_enabled: false)"
           fi
 
           if [[ -n "$root_password_file" && -s "$root_password_file" ]]; then
-            sudo gitlab-rails runner "password = File.read('${root_password_file}').strip; user = User.find_by_username('root'); user.password = password; user.password_confirmation = password; user.save!"
+            sudo docker exec -i gitlab gitlab-rails runner "password = STDIN.read.strip; user = User.find_by_username('root'); user.password = password; user.password_confirmation = password; user.save!" < "$root_password_file"
           fi
 
-          sudo gitlab-ctl status
-          for i in {1..90}; do
-            if curl -fsS http://127.0.0.1/-/readiness >/dev/null 2>&1 || curl -fsS http://127.0.0.1/users/sign_in >/dev/null 2>&1; then
-              echo "GitLab is responding locally"
-              exit 0
-            fi
-            echo "Waiting for GitLab web readiness... ($i/90)"
-            sleep 10
-          done
-          echo "GitLab did not become ready on local HTTP" >&2
-          exit 1
+          sudo docker exec gitlab gitlab-ctl status
           REMOTE
+
+          if ssh -F "$HA_OPENSTACK_SSH_CONFIG" "${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}" \
+            "curl -fsS http://127.0.0.1/-/readiness >/dev/null 2>&1 || curl -fsS http://127.0.0.1/users/sign_in >/dev/null 2>&1"; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::GitLab container started, but first boot is still running on the VM. Re-run apply after it becomes ready to register GPU runners."
+          fi
 
       - name: Configure GitLab reverse proxy upstream
         if: ${{ steps.gitlab.outputs.enabled == 'true' }}
@@ -1908,8 +2142,8 @@ jobs:
             lxc config device remove ha-openstack gitlab-proxy >/dev/null 2>&1 || true
             lxc config device add ha-openstack gitlab-proxy proxy \
               "listen=tcp:127.0.0.1:${GITLAB_UPSTREAM_PORT}" \
-              "connect=tcp:${{ steps.gitlab.outputs.GITLAB_PRIVATE_IP }}:80"
-            echo "Configured LXD proxy 127.0.0.1:${GITLAB_UPSTREAM_PORT} -> ${{ steps.gitlab.outputs.GITLAB_PRIVATE_IP }}:80"
+              "connect=tcp:${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}:80"
+            echo "Configured LXD proxy 127.0.0.1:${GITLAB_UPSTREAM_PORT} -> ${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}:80"
           else
             ssh -F "$HA_OPENSTACK_SSH_CONFIG" \
               -fN \
@@ -1918,33 +2152,31 @@ jobs:
             echo "Started SSH proxy 127.0.0.1:${GITLAB_UPSTREAM_PORT} -> ${{ steps.gitlab.outputs.GITLAB_TARGET_IP }}:80"
           fi
 
-          for i in {1..30}; do
-            if curl -fsS "http://127.0.0.1:${GITLAB_UPSTREAM_PORT}/users/sign_in" >/dev/null 2>&1 || curl -fsS "http://127.0.0.1:${GITLAB_UPSTREAM_PORT}/-/readiness" >/dev/null 2>&1; then
-              echo "GitLab upstream proxy is ready on 127.0.0.1:${GITLAB_UPSTREAM_PORT}"
-              {
-                echo "## GitLab"
-                echo
-                echo "| Field | Value |"
-                echo "| --- | --- |"
-                echo "| URL | \`${GITLAB_EXTERNAL_URL}\` |"
-                echo "| Domain | \`${GITLAB_DOMAIN}\` |"
-                echo "| Node | \`${{ steps.gitlab.outputs.GITLAB_NODE_NAME }}\` |"
-                echo "| Upstream | \`127.0.0.1:${GITLAB_UPSTREAM_PORT}\` |"
-                echo "| Sign-up enabled | \`${GITLAB_SIGNUP_ENABLED}\` |"
-                if [[ -n "${GITLAB_ROOT_PASSWORD:-}" ]]; then
-                  echo "| Root password | configured from \`GITLAB_ROOT_PASSWORD\` secret |"
-                else
-                  echo "| Root password | generated on VM at \`/etc/gitlab/initial_root_password\` |"
-                fi
-              } >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            echo "Waiting for GitLab upstream proxy... ($i/30)"
-            sleep 10
-          done
+          upstream_status="booting"
+          if curl -fsS "http://127.0.0.1:${GITLAB_UPSTREAM_PORT}/users/sign_in" >/dev/null 2>&1 || curl -fsS "http://127.0.0.1:${GITLAB_UPSTREAM_PORT}/-/readiness" >/dev/null 2>&1; then
+            upstream_status="ready"
+            echo "GitLab upstream proxy is ready on 127.0.0.1:${GITLAB_UPSTREAM_PORT}"
+          else
+            echo "::notice::GitLab upstream proxy is configured, but GitLab is still booting"
+          fi
 
-          echo "::error::GitLab upstream proxy did not become ready on 127.0.0.1:${GITLAB_UPSTREAM_PORT}"
-          exit 1
+          {
+            echo "## GitLab"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| URL | \`${GITLAB_EXTERNAL_URL}\` |"
+            echo "| Domain | \`${GITLAB_DOMAIN}\` |"
+            echo "| Node | \`${{ steps.gitlab.outputs.GITLAB_NODE_NAME }}\` |"
+            echo "| Upstream | \`127.0.0.1:${GITLAB_UPSTREAM_PORT}\` |"
+            echo "| Status | \`${upstream_status}\` |"
+            echo "| Sign-up enabled | \`${GITLAB_SIGNUP_ENABLED}\` |"
+            if [[ -n "${GITLAB_ROOT_PASSWORD:-}" ]]; then
+              echo "| Root password | configured from \`GITLAB_ROOT_PASSWORD\` secret when GitLab is ready |"
+            else
+              echo "| Root password | generated on VM at \`/srv/gitlab/config/initial_root_password\` after first boot |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Reload Caddy for GitLab
         if: ${{ steps.gitlab.outputs.enabled == 'true' }}
@@ -2522,12 +2754,12 @@ jobs:
     name: Setup GitLab GPU Runner
     runs-on: ${{ vars.PRIVATE_CLOUD_RUNNER || 'private-cloud' }}
     needs: [terraform, bootstrap-k8s, setup-storage, setup-gitlab]
-    if: ${{ always() && needs.terraform.result == 'success' && needs.bootstrap-k8s.result == 'success' && needs.setup-gitlab.result == 'success' && (!inputs.setup_storage || needs.setup-storage.result == 'success') && inputs.action == 'apply' && inputs.bootstrap_kubernetes }}
+    if: ${{ always() && needs.terraform.result == 'success' && needs.bootstrap-k8s.result == 'success' && needs.setup-gitlab.result == 'success' && needs.setup-gitlab.outputs.ready == 'true' && (!inputs.setup_storage || needs.setup-storage.result == 'success') && inputs.action == 'apply' && inputs.bootstrap_kubernetes }}
     defaults:
       run:
         working-directory: private/openstack
     env:
-      GITLAB_URL: ${{ vars.GITLAB_URL || vars.GITLAB_EXTERNAL_URL || 'https://git.intp.me' }}
+      GITLAB_URL: ${{ vars.GITLAB_URL || vars.GITLAB_EXTERNAL_URL || 'https://gitlab.intp.me' }}
       GITLAB_RUNNER_TOKEN: ${{ secrets.GITLAB_RUNNER_TOKEN }}
       GITLAB_GPU_RUNNER_NAME_PREFIX: ${{ vars.GITLAB_GPU_RUNNER_NAME_PREFIX || 'hybrid-ai-gpu' }}
       GITLAB_GPU_RUNNER_TAGS: ${{ vars.GITLAB_GPU_RUNNER_TAGS || 'gpu-worker' }}

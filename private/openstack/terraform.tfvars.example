@@ -30,6 +30,9 @@ gitlab_count       = 1
 gitlab_image_name  = "ubuntu-22.04"
 gitlab_flavor_name = "m1.large"
 
+# Keep empty unless a host reverse proxy must reach the GitLab VM directly over HTTP.
+gitlab_http_allowed_cidrs = []
+
 # Cloud-init installs common Kubernetes, storage, diagnostics, and GPU host dependencies.
 install_node_dependencies = true
 enable_gpu_bootstrap      = true

@@ -51,9 +51,9 @@ Private Cloud Foundation에서 담당하지 않는 것:
 - model artifact PVC 이름: `model-artifacts`
 - MinIO API NodePort: `30900`
 - MinIO console NodePort: `30990`
-- GitLab URL: `https://git.intp.me`
+- GitLab URL: `https://gitlab.intp.me`
 - GitLab Caddy upstream: `127.0.0.1:18083`
-- GitLab root password 기준: `GITLAB_ROOT_PASSWORD` Secret 또는 VM `/etc/gitlab/initial_root_password`
+- GitLab root password 기준: `GITLAB_ROOT_PASSWORD` Secret 또는 VM `/srv/gitlab/config/initial_root_password`
 - GitLab 계정 생성 기준: 먼저 `root`로 로그인한 뒤 Admin 영역에서 사용자 생성 또는 초대
 - GitLab GPU runner tag: `gpu-worker`
 - GitLab training helper: `hybrid-ai-training-run`

@@ -162,7 +162,7 @@ ha tf destroy
 | Kubernetes UI | `k8s.intp.me` | `127.0.0.1:18082` |
 | Grafana | `grafana.intp.me` | `127.0.0.1:3000` |
 | ArgoCD | `argocd.intp.me` | `127.0.0.1:8080` |
-| GitLab | `git.intp.me` | `127.0.0.1:18083` |
+| GitLab | `gitlab.intp.me` | `127.0.0.1:18083` |
 
 설정 파일:
 
@@ -230,12 +230,17 @@ credential을 검증합니다.
 - `PRIVATE_CLOUD_K8S_POD_CIDR`: kubeadm과 CNI가 사용할 Pod CIDR, 기본 `192.168.0.0/16`
 - `PRIVATE_CLOUD_K8S_CNI_MANIFEST`: bootstrap 후 적용할 CNI manifest, 기본 Calico
 - `PRIVATE_CLOUD_K8S_API_ENDPOINT`: kubeconfig에 기록할 API endpoint, 기본 `PRIVATE_CLOUD_TAILSCALE_IP`
-- `GITLAB_DOMAIN`: 기본 `git.intp.me`
-- `GITLAB_EXTERNAL_URL`: 기본 `https://git.intp.me`
+- `GITLAB_DOMAIN`: 기본 `gitlab.intp.me`
+- `GITLAB_EXTERNAL_URL`: 기본 `https://gitlab.intp.me`
+- `GITLAB_IMAGE`: 기본 `gitlab/gitlab-ce:latest`
 - `GITLAB_SIGNUP_ENABLED`: 기본 `false`
 - `GITLAB_UPSTREAM_PORT`: 기본 `18083`
 - `GITLAB_GPU_RUNNER_NAME_PREFIX`: 기본 `hybrid-ai-gpu`
 - `GITLAB_GPU_RUNNER_TAGS`: 기본 `gpu-worker`
+
+GitLab CE 첫 부팅은 VM 성능에 따라 오래 걸릴 수 있습니다. Apply는 GitLab container와 reverse proxy upstream을
+만들면 성공 처리하고, GitLab HTTP가 아직 booting이면 runner 등록은 건너뜁니다. GitLab이 ready된 뒤 같은 Apply를
+다시 실행하면 GPU runner 등록이 이어집니다.
 
 DNS는 Plan/Apply/Destroy workflow 안에서 자동 실행됩니다.
 
@@ -258,4 +263,4 @@ DNS는 Plan/Apply/Destroy workflow 안에서 자동 실행됩니다.
 - `PRIVATE_CLOUD_DNS_TTL`
 - `PRIVATE_CLOUD_DNS_SERVICES`
 
-`PRIVATE_CLOUD_DNS_SERVICES`를 기존 값으로 유지해도 workflow가 `git`을 덧붙이므로 `git.intp.me` DNS가 같이 관리됩니다.
+`PRIVATE_CLOUD_DNS_SERVICES`를 기존 값으로 유지해도 workflow가 `gitlab`을 덧붙이므로 `gitlab.intp.me` DNS가 같이 관리됩니다. 예전 값 `git`은 `gitlab`으로 정규화되어 `git.intp.me`는 생성/수정하지 않습니다.

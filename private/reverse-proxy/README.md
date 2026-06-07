@@ -32,7 +32,7 @@ flowchart LR
   Admin -->|https k8s.intp.me| Caddy
   Admin -->|https grafana.intp.me| Caddy
   Admin -->|https argocd.intp.me| Caddy
-  Admin -->|https git.intp.me| Caddy
+  Admin -->|https gitlab.intp.me| Caddy
   Caddy --> Horizon
   Caddy --> K8S
   Caddy --> Grafana
@@ -52,7 +52,7 @@ Cloudflare record는 모두 DNS-only로 둡니다. Tailscale IP는 Cloudflare ed
 | `k8s.intp.me` | `CNAME` | `ssh.intp.me` | off |
 | `grafana.intp.me` | `CNAME` | `ssh.intp.me` | off |
 | `argocd.intp.me` | `CNAME` | `ssh.intp.me` | off |
-| `git.intp.me` | `CNAME` | `ssh.intp.me` | off |
+| `gitlab.intp.me` | `CNAME` | `ssh.intp.me` | off |
 
 ## 로컬 환경 변수
 
@@ -66,7 +66,7 @@ HA_OPENSTACK_DOMAIN=openstack.intp.me
 HA_K8S_DOMAIN=k8s.intp.me
 HA_GRAFANA_DOMAIN=grafana.intp.me
 HA_ARGOCD_DOMAIN=argocd.intp.me
-HA_GIT_DOMAIN=git.intp.me
+HA_GIT_DOMAIN=gitlab.intp.me
 HA_OPENSTACK_HORIZON_UPSTREAM=127.0.0.1:18081
 HA_GITLAB_UPSTREAM=127.0.0.1:18083
 CLOUDFLARE_API_TOKEN=...
@@ -130,7 +130,7 @@ Plan은 dry-run만 확인하고, Apply는 Cloudflare에 record를 upsert하며, 
 | 권한 | 필요한 이유 |
 | --- | --- |
 | `Zone:Read` | `intp.me` zone 접근 검증과 zone metadata 조회 |
-| `DNS:Edit` | `ssh`, `openstack`, `k8s`, `grafana`, `argocd`, `git` record 생성/수정 |
+| `DNS:Edit` | `ssh`, `openstack`, `k8s`, `grafana`, `argocd`, `gitlab` record 생성/수정 |
 | `DNS:Edit` | Caddy DNS-01 인증서 발급 시 `_acme-challenge` TXT record 생성/삭제 |
 
 권한 생성 절차:

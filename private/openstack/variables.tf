@@ -52,6 +52,12 @@ variable "ssh_allowed_cidrs" {
   default     = []
 }
 
+variable "gitlab_http_allowed_cidrs" {
+  description = "CIDR ranges allowed to reach the standalone GitLab VM over HTTP. Used by the host reverse proxy; keep empty unless a local proxy needs direct VM HTTP access."
+  type        = list(string)
+  default     = []
+}
+
 variable "key_pair_name" {
   description = "OpenStack key pair name for provisioned instances."
   type        = string

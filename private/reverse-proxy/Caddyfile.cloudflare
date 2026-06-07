@@ -36,7 +36,7 @@
 	reverse_proxy {$HA_ARGOCD_UPSTREAM:127.0.0.1:8080}
 }
 
-{$HA_GIT_DOMAIN:git.intp.me} {
+{$HA_GIT_DOMAIN:gitlab.intp.me} {
 	import cloudflare_tls
 	encode zstd gzip
 	reverse_proxy {$HA_GITLAB_UPSTREAM:127.0.0.1:18083} {

@@ -91,6 +91,18 @@ resource "openstack_networking_secgroup_rule_v2" "allow_ssh" {
   security_group_id = openstack_networking_secgroup_v2.private.id
 }
 
+resource "openstack_networking_secgroup_rule_v2" "allow_gitlab_http" {
+  for_each = toset(var.gitlab_count > 0 ? var.gitlab_http_allowed_cidrs : [])
+
+  direction         = "ingress"
+  ethertype         = "IPv4"
+  protocol          = "tcp"
+  port_range_min    = 80
+  port_range_max    = 80
+  remote_ip_prefix  = each.value
+  security_group_id = openstack_networking_secgroup_v2.private.id
+}
+
 resource "openstack_compute_keypair_v2" "admin" {
   name       = var.key_pair_name
   public_key = var.ssh_public_key
