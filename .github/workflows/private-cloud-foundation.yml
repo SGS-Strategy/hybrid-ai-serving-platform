@@ -97,7 +97,15 @@ env:
   HA_OPENSTACK_GPU_FLAVOR_NAME: ${{ vars.OPENSTACK_GPU_FLAVOR_NAME || 'g1.large' }}
   HA_OPENSTACK_GPU_FLAVOR_RAM: ${{ vars.OPENSTACK_GPU_FLAVOR_RAM || '8192' }}
   HA_OPENSTACK_GPU_FLAVOR_VCPUS: ${{ vars.OPENSTACK_GPU_FLAVOR_VCPUS || '4' }}
-  HA_OPENSTACK_GPU_FLAVOR_DISK: ${{ vars.OPENSTACK_GPU_FLAVOR_DISK || '40' }}
+  HA_OPENSTACK_GPU_FLAVOR_DISK: ${{ vars.OPENSTACK_GPU_FLAVOR_DISK || '30' }}
+  HA_DEVSTACK_CONTROL_FLAVOR_NAME: ha.m1.medium
+  HA_DEVSTACK_CONTROL_FLAVOR_RAM: "4096"
+  HA_DEVSTACK_CONTROL_FLAVOR_VCPUS: "2"
+  HA_DEVSTACK_CONTROL_FLAVOR_DISK: "15"
+  HA_DEVSTACK_WORKER_FLAVOR_NAME: ha.m1.large
+  HA_DEVSTACK_WORKER_FLAVOR_RAM: "8192"
+  HA_DEVSTACK_WORKER_FLAVOR_VCPUS: "4"
+  HA_DEVSTACK_WORKER_FLAVOR_DISK: "25"
 
 jobs:
   install-openstack:
@@ -428,11 +436,8 @@ jobs:
             gpu_product_id="$(printf '%s' "$gpu_product_id" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')"
           fi
 
-          gpu_flavor_name="${TF_VAR_gpu_worker_flavor_name:-${HA_OPENSTACK_GPU_FLAVOR_NAME}}"
-          if [[ "$gpu_flavor_name" == "${TF_VAR_build_worker_flavor_name:-}" || "$gpu_flavor_name" == "${TF_VAR_control_plane_flavor_name:-}" ]]; then
-            echo "::notice::GPU worker flavor '${gpu_flavor_name}' overlaps another node flavor; using dedicated local DevStack GPU flavor '${HA_OPENSTACK_GPU_FLAVOR_NAME}'"
-            gpu_flavor_name="${HA_OPENSTACK_GPU_FLAVOR_NAME}"
-          fi
+          gpu_flavor_name="${HA_OPENSTACK_GPU_FLAVOR_NAME}"
+          echo "::notice::Using dedicated local DevStack GPU flavor '${gpu_flavor_name}'"
 
           if [[ -n "$gpu_product_id" ]]; then
             echo "Detected GPU PCI device: ${gpu_vendor_id}:${gpu_product_id}"
@@ -626,6 +631,84 @@ jobs:
           RUN_DEVSTACK
           echo "DevStack installation complete"
 
+      - name: Ensure DevStack compute flavors
+        if: inputs.action != 'destroy'
+        run: |
+          lxc exec ha-openstack -- sudo -u stack -H bash -s -- \
+            "${HA_DEVSTACK_CONTROL_FLAVOR_NAME}" \
+            "${HA_DEVSTACK_CONTROL_FLAVOR_RAM}" \
+            "${HA_DEVSTACK_CONTROL_FLAVOR_VCPUS}" \
+            "${HA_DEVSTACK_CONTROL_FLAVOR_DISK}" \
+            "${HA_DEVSTACK_WORKER_FLAVOR_NAME}" \
+            "${HA_DEVSTACK_WORKER_FLAVOR_RAM}" \
+            "${HA_DEVSTACK_WORKER_FLAVOR_VCPUS}" \
+            "${HA_DEVSTACK_WORKER_FLAVOR_DISK}" \
+            "${HA_OPENSTACK_GPU_FLAVOR_NAME}" \
+            "${HA_OPENSTACK_GPU_FLAVOR_RAM}" \
+            "${HA_OPENSTACK_GPU_FLAVOR_VCPUS}" \
+            "${HA_OPENSTACK_GPU_FLAVOR_DISK}" <<'ENSURE_COMPUTE_FLAVORS'
+          set -eo pipefail
+          cd /opt/stack/devstack
+          source openrc admin admin >/dev/null
+          set -u
+
+          flavor_matches() {
+            local flavor_name="$1"
+            local expected_ram="$2"
+            local expected_vcpus="$3"
+            local expected_disk="$4"
+            local flavor_json
+            flavor_json="$(openstack flavor show "$flavor_name" -f json)"
+            python3 - "$expected_ram" "$expected_vcpus" "$expected_disk" "$flavor_json" <<'PY'
+          import json
+          import sys
+
+          expected_ram, expected_vcpus, expected_disk = map(int, sys.argv[1:4])
+          flavor = json.loads(sys.argv[4])
+          if (
+              int(flavor["ram"]) == expected_ram
+              and int(flavor["vcpus"]) == expected_vcpus
+              and int(flavor["disk"]) == expected_disk
+          ):
+              sys.exit(0)
+          sys.exit(1)
+          PY
+          }
+
+          ensure_flavor() {
+            local flavor_name="$1"
+            local flavor_ram="$2"
+            local flavor_vcpus="$3"
+            local flavor_disk="$4"
+
+            if openstack flavor show "$flavor_name" >/dev/null 2>&1; then
+              if flavor_matches "$flavor_name" "$flavor_ram" "$flavor_vcpus" "$flavor_disk"; then
+                echo "Flavor already matches: ${flavor_name}"
+              else
+                echo "::notice::Recreating local DevStack flavor ${flavor_name} with ${flavor_ram}MB RAM, ${flavor_vcpus} vCPU, ${flavor_disk}GB disk"
+                openstack flavor delete "$flavor_name"
+                openstack flavor create \
+                  --ram "$flavor_ram" \
+                  --vcpus "$flavor_vcpus" \
+                  --disk "$flavor_disk" \
+                  "$flavor_name" >/dev/null
+              fi
+            else
+              openstack flavor create \
+                --ram "$flavor_ram" \
+                --vcpus "$flavor_vcpus" \
+                --disk "$flavor_disk" \
+                "$flavor_name" >/dev/null
+            fi
+
+            openstack flavor set --property "hw_rng:allowed=True" "$flavor_name"
+          }
+
+          ensure_flavor "$1" "$2" "$3" "$4"
+          ensure_flavor "$5" "$6" "$7" "$8"
+          ensure_flavor "$9" "${10}" "${11}" "${12}"
+          ENSURE_COMPUTE_FLAVORS
+
       - name: Configure Nova GPU passthrough
         if: inputs.action != 'destroy' && env.HA_DETECTED_GPU_PCI_PRODUCT_ID != ''
         run: |
@@ -791,6 +874,62 @@ jobs:
           done
           ENSURE_IMAGE
 
+      - name: Ensure DevStack OpenStack user
+        if: inputs.action != 'destroy'
+        run: |
+          target_username="${OS_USERNAME:-admin}"
+          target_project="${OS_PROJECT_NAME:-admin}"
+          target_password="${OS_PASSWORD:-}"
+          target_user_domain="${OS_USER_DOMAIN_NAME:-Default}"
+          target_project_domain="${OS_PROJECT_DOMAIN_NAME:-Default}"
+
+          if [[ -z "$target_password" ]]; then
+            echo "::error::OPENSTACK_PASSWORD is required to ensure the local DevStack OpenStack user"
+            exit 1
+          fi
+
+          lxc exec ha-openstack -- sudo -u stack -H bash -s -- \
+            "$target_username" \
+            "$target_project" \
+            "$target_password" \
+            "$target_user_domain" \
+            "$target_project_domain" <<'ENSURE_OPENSTACK_USER'
+          set -eo pipefail
+          target_username="$1"
+          target_project="$2"
+          target_password="$3"
+          target_user_domain="$4"
+          target_project_domain="$5"
+
+          cd /opt/stack/devstack
+          source openrc admin admin >/dev/null
+          set -u
+
+          if ! openstack project show --domain "$target_project_domain" "$target_project" >/dev/null 2>&1; then
+            openstack project create --domain "$target_project_domain" "$target_project" >/dev/null
+          fi
+
+          if [[ "$target_username" != "admin" ]]; then
+            if openstack user show --domain "$target_user_domain" "$target_username" >/dev/null 2>&1; then
+              openstack user set --domain "$target_user_domain" --password "$target_password" "$target_username"
+            else
+              openstack user create \
+                --domain "$target_user_domain" \
+                --password "$target_password" \
+                "$target_username" >/dev/null
+            fi
+
+            openstack role add \
+              --project "$target_project" \
+              --project-domain "$target_project_domain" \
+              --user "$target_username" \
+              --user-domain "$target_user_domain" \
+              member
+          fi
+
+          echo "Ensured local DevStack user ${target_username} in project ${target_project}"
+          ENSURE_OPENSTACK_USER
+
       - name: Ensure DevStack SSH proxy tools
         run: |
           lxc exec ha-openstack -- bash -s <<'ENSURE_PROXY_TOOLS'
@@ -930,12 +1069,18 @@ jobs:
           }
 
           if [[ "${INSTALL_OPENSTACK}" == "true" ]]; then
+            target_username="${OS_USERNAME:-admin}"
+            target_project="${OS_PROJECT_NAME:-admin}"
+            target_user_domain="${OS_USER_DOMAIN_NAME:-Default}"
+            target_project_domain="${OS_PROJECT_DOMAIN_NAME:-Default}"
+            target_region="${OS_REGION_NAME:-RegionOne}"
+
             write_env OS_AUTH_URL "http://127.0.0.1:18081/identity/v3"
-            write_env OS_USERNAME "admin"
-            write_env OS_PROJECT_NAME "admin"
-            write_env OS_USER_DOMAIN_NAME "Default"
-            write_env OS_PROJECT_DOMAIN_NAME "Default"
-            write_env OS_REGION_NAME "RegionOne"
+            write_env OS_USERNAME "$target_username"
+            write_env OS_PROJECT_NAME "$target_project"
+            write_env OS_USER_DOMAIN_NAME "$target_user_domain"
+            write_env OS_PROJECT_DOMAIN_NAME "$target_project_domain"
+            write_env OS_REGION_NAME "$target_region"
           fi
 
       - name: Validate required configuration
@@ -1028,12 +1173,14 @@ jobs:
               printf 'floating_ip_pool = "public"\n'
               printf 'assign_floating_ips = true\n'
               printf 'control_plane_image_name = "%s"\n' "${TF_VAR_control_plane_image_name}"
+              printf 'control_plane_flavor_name = "%s"\n' "${HA_DEVSTACK_CONTROL_FLAVOR_NAME}"
               printf 'build_worker_image_name = "%s"\n' "${TF_VAR_build_worker_image_name}"
+              printf 'build_worker_flavor_name = "%s"\n' "${HA_DEVSTACK_WORKER_FLAVOR_NAME}"
               printf 'gpu_worker_image_name = "%s"\n' "${TF_VAR_gpu_worker_image_name}"
-              printf 'gpu_worker_flavor_name = "%s"\n' "${TF_VAR_gpu_worker_flavor_name}"
+              printf 'gpu_worker_flavor_name = "%s"\n' "${HA_OPENSTACK_GPU_FLAVOR_NAME}"
               printf 'gitlab_count = %s\n' "${TF_VAR_gitlab_count}"
               printf 'gitlab_image_name = "%s"\n' "${TF_VAR_gitlab_image_name}"
-              printf 'gitlab_flavor_name = "%s"\n' "${TF_VAR_gitlab_flavor_name}"
+              printf 'gitlab_flavor_name = "%s"\n' "${HA_DEVSTACK_WORKER_FLAVOR_NAME}"
             } > zz-local-devstack.auto.tfvars
             echo "Wrote Terraform DevStack overrides for local OpenStack"
           fi
