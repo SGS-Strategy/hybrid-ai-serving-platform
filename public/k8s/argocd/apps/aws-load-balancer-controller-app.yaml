@@ -16,11 +16,12 @@ spec:
       valuesObject:
         clusterName: sgs-hasp-eks
         region: ap-northeast-2
+        vpcId: __VPC_ID__
         serviceAccount:
           create: true
           name: aws-load-balancer-controller
           annotations:
-            eks.amazonaws.com/role-arn: arn:aws:iam::808379768010:role/sgs-hasp-aws-load-balancer-controller
+            eks.amazonaws.com/role-arn: __AWS_LOAD_BALANCER_CONTROLLER_ROLE_ARN__
   destination:
     server: https://kubernetes.default.svc
     namespace: kube-system
