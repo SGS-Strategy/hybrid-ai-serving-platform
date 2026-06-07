@@ -180,7 +180,7 @@ jobs:
           echo "DevStack container removed"
 
       - name: Cleanup existing DevStack
-        if: steps.check_devstack.outputs.devstack_running == 'false' && steps.check_devstack.outputs.container_exists == 'true' && !inputs.force_cleanup
+        if: steps.check_devstack.outputs.devstack_running == 'false' && steps.check_devstack.outputs.container_exists == 'true' && (!inputs.force_cleanup || inputs.action == 'destroy')
         run: |
           echo "Cleaning up incomplete DevStack installation..."
           lxc stop ha-openstack --force 2>/dev/null || true
@@ -649,6 +649,7 @@ jobs:
             "${HA_OPENSTACK_GPU_FLAVOR_DISK}" <<'ENSURE_COMPUTE_FLAVORS'
           set -eo pipefail
           cd /opt/stack/devstack
+          set +u
           source openrc admin admin >/dev/null
           set -u
 
@@ -774,6 +775,7 @@ jobs:
           CONFIGURE_GPU_PASSTHROUGH
 
       - name: Configure Horizon proxy settings
+        if: inputs.action != 'destroy'
         run: |
           horizon_domain="openstack.${PRIVATE_CLOUD_BASE_DOMAIN}"
           lxc exec ha-openstack -- bash -s -- "$horizon_domain" <<'CONFIGURE_HORIZON'
@@ -813,6 +815,7 @@ jobs:
           echo "Horizon proxy settings configured for ${horizon_domain}"
 
       - name: Ensure DevStack Ubuntu image
+        if: inputs.action != 'destroy'
         run: |
           lxc exec ha-openstack -- sudo -u stack -H bash -s -- \
             "${TF_VAR_control_plane_image_name}" \
@@ -821,6 +824,7 @@ jobs:
             "${TF_VAR_gitlab_image_name}" <<'ENSURE_IMAGE'
           set -eo pipefail
           cd /opt/stack/devstack
+          set +u
           source openrc admin admin >/dev/null
           set -u
 
@@ -902,6 +906,7 @@ jobs:
           target_project_domain="$5"
 
           cd /opt/stack/devstack
+          set +u
           source openrc admin admin >/dev/null
           set -u
 
@@ -971,6 +976,7 @@ jobs:
           lxc exec ha-openstack -- sudo -u stack -H bash -s <<'LOOKUP_PUBLIC_EGRESS' > /tmp/ha-devstack-public-egress.env
           set -eo pipefail
           cd /opt/stack/devstack
+          set +u
           source openrc admin admin >/dev/null
           set -u
 
@@ -1258,15 +1264,15 @@ jobs:
 
           if [[ "${INSTALL_OPENSTACK}" == "true" ]]; then
             public_network_id=$(lxc exec ha-openstack -- sudo -u stack -H bash -lc \
-              'cd /opt/stack/devstack && source openrc admin admin >/dev/null && openstack network show public -f value -c id')
+              'cd /opt/stack/devstack && set +u && source openrc admin admin >/dev/null && set -u && openstack network show public -f value -c id')
             public_subnet_id=$(lxc exec ha-openstack -- sudo -u stack -H bash -lc \
-              'cd /opt/stack/devstack && source openrc admin admin >/dev/null && openstack subnet list --network public --ip-version 4 -f value -c ID | head -n 1')
+              'cd /opt/stack/devstack && set +u && source openrc admin admin >/dev/null && set -u && openstack subnet list --network public --ip-version 4 -f value -c ID | head -n 1')
             if [[ -z "$public_subnet_id" ]]; then
               echo "::error::DevStack public network has no IPv4 subnet"
               exit 1
             fi
             public_subnet_cidr=$(lxc exec ha-openstack -- sudo -u stack -H bash -lc \
-              "cd /opt/stack/devstack && source openrc admin admin >/dev/null && openstack subnet show '${public_subnet_id}' -f value -c cidr")
+              "cd /opt/stack/devstack && set +u && source openrc admin admin >/dev/null && set -u && openstack subnet show '${public_subnet_id}' -f value -c cidr")
             {
               printf 'external_network_id = "%s"\n' "$public_network_id"
               printf 'floating_ip_pool = "public"\n'
@@ -1375,7 +1381,7 @@ jobs:
           private_network_cidr="$(read_tf_string private_network_cidr 10.42.0.0/24)"
           # shellcheck disable=SC2016
           public_subnet_cidr="$(lxc exec ha-openstack -- sudo -u stack -H bash -lc \
-            'cd /opt/stack/devstack && source openrc admin admin >/dev/null && public_subnet_id=$(openstack subnet list --network public --ip-version 4 -f value -c ID | head -n 1); [[ -n "$public_subnet_id" ]] && openstack subnet show "$public_subnet_id" -f value -c cidr' \
+            'cd /opt/stack/devstack && set +u && source openrc admin admin >/dev/null && set -u && public_subnet_id=$(openstack subnet list --network public --ip-version 4 -f value -c ID | head -n 1); [[ -n "$public_subnet_id" ]] && openstack subnet show "$public_subnet_id" -f value -c cidr' \
             2>/dev/null || true)"
           target_project_id="$(lxc exec ha-openstack -- sudo -u stack -H bash -s -- \
             "${OS_PROJECT_NAME}" \
@@ -1384,7 +1390,9 @@ jobs:
           project_name="$1"
           project_domain="$2"
           cd /opt/stack/devstack
+          set +u
           source openrc admin admin >/dev/null
+          set -u
           openstack project show --domain "$project_domain" "$project_name" -f value -c id
           LOOKUP_PROJECT
           )"
@@ -1399,6 +1407,7 @@ jobs:
           target_project_id="$2"
 
           cd /opt/stack/devstack
+          set +u
           source openrc admin admin >/dev/null
           set -u
 
@@ -1509,7 +1518,9 @@ jobs:
           set -eo pipefail
           port_id="$1"
           cd /opt/stack/devstack
+          set +u
           source openrc admin admin >/dev/null
+          set -u
           openstack port show "$port_id" -f value -c project_id 2>/dev/null || true
           PORT_PROJECT
           }
@@ -1520,7 +1531,9 @@ jobs:
           set -eo pipefail
           fip_id="$1"
           cd /opt/stack/devstack
+          set +u
           source openrc admin admin >/dev/null
+          set -u
           openstack floating ip show "$fip_id" -f value -c project_id 2>/dev/null || true
           FIP_PROJECT
           }
@@ -1581,7 +1594,9 @@ jobs:
           port_max="$5"
 
           cd /opt/stack/devstack
+          set +u
           source openrc admin admin >/dev/null
+          set -u
           rule_json="$(openstack security group rule list "$security_group_id" -f json)"
           python3 - "$protocol" "$cidr" "$port_min" "$port_max" "$rule_json" <<'PY'
           import json
@@ -1776,7 +1791,9 @@ jobs:
           project_name="$1"
           project_domain="$2"
           cd /opt/stack/devstack
+          set +u
           source openrc admin admin >/dev/null
+          set -u
           openstack project show --domain "$project_domain" "$project_name" -f value -c id
           LOOKUP_PROJECT
           )"
@@ -1789,7 +1806,9 @@ jobs:
           target_project_id="$2"
 
           cd /opt/stack/devstack
+          set +u
           source openrc admin admin >/dev/null
+          set -u
 
           python3 - "$project_name" "$target_project_id" <<'PY'
           import json
@@ -1912,6 +1931,41 @@ jobs:
               if not project_id or project_id == target_project_id:
                   print(f"Deleting orphan security group {sg_name} ({sg_id})")
                   run("security", "group", "delete", sg_id)
+
+          remaining = []
+
+          for server_id, server_name in list_named("server", "--all-projects"):
+              details = show("server", server_id)
+              if project_of(details) == target_project_id:
+                  remaining.append(("server", server_id, server_name))
+
+          for port_id, port_name in target_ports():
+              remaining.append(("port", port_id, port_name))
+
+          for kind, expected_name in (
+              ("router", f"{project_name}-router"),
+              ("subnet", f"{project_name}-subnet"),
+              ("network", f"{project_name}-net"),
+          ):
+              for resource_id, resource_name in list_named(kind):
+                  if resource_name == expected_name and in_target_project(kind, resource_id):
+                      remaining.append((kind, resource_id, resource_name))
+
+          for security_group in openstack_json("security", "group", "list", "-c", "ID", "-c", "Name"):
+              sg_id = security_group.get("ID")
+              sg_name = name_of(security_group)
+              if not sg_id or sg_name != f"{project_name}-sg":
+                  continue
+              details = show("security group", sg_id)
+              project_id = project_of(details)
+              if not project_id or project_id == target_project_id:
+                  remaining.append(("security group", sg_id, sg_name))
+
+          if remaining:
+              print("::error::Local DevStack destroy cleanup left managed resources behind")
+              for kind, resource_id, resource_name in remaining:
+                  print(f"remaining {kind}: {resource_name} ({resource_id})")
+              sys.exit(1)
           PY
           CLEANUP_ORPHANS
 
@@ -2132,6 +2186,7 @@ jobs:
             lxc exec ha-openstack -- sudo -u stack -H bash -s <<'LOOKUP_PUBLIC_EGRESS' > /tmp/ha-devstack-public-egress.env
           set -eo pipefail
           cd /opt/stack/devstack
+          set +u
           source openrc admin admin >/dev/null
           set -u
           public_subnet_id="$(openstack subnet list --network public --ip-version 4 -f value -c ID | head -n 1)"
