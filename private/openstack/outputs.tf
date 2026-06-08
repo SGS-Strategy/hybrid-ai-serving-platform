@@ -82,6 +82,22 @@ output "gitlab_nodes" {
   ]
 }
 
+output "harbor_nodes" {
+  description = "Standalone Harbor registry VM inventory."
+  value = [
+    for index, node in openstack_compute_instance_v2.harbor : {
+      name       = node.name
+      private_ip = openstack_networking_port_v2.harbor[index].all_fixed_ips[0]
+      floating_ip = (
+        var.assign_floating_ips
+        ? openstack_networking_floatingip_v2.harbor[index].address
+        : null
+      )
+      role = node.metadata.role
+    }
+  ]
+}
+
 output "nfs_server_ip" {
   description = "NFS server IP (first control-plane node)."
   value       = openstack_networking_port_v2.control_plane[0].all_fixed_ips[0]

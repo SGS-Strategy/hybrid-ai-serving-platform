@@ -3,26 +3,19 @@ name: Private Cloud Apply
 on:
   workflow_dispatch:
     inputs:
-      force_cleanup:
-        description: Recreate the local DevStack control plane before applying
+      run_mode:
+        description: Apply from existing DevStack or reinstall everything from DevStack
         required: true
-        type: boolean
-        default: false
-      setup_storage:
-        description: Install MinIO and NFS storage after Kubernetes bootstrap
-        required: true
-        type: boolean
-        default: true
+        type: choice
+        default: apply
+        options:
+          - apply
+          - reinstall
       validate_gpu:
         description: Run GPU passthrough validation jobs
         required: true
         type: boolean
         default: false
-      minio_volume_size:
-        description: MinIO volume size per disk (Gi)
-        required: true
-        type: string
-        default: "10"
 
 permissions:
   contents: read
@@ -34,10 +27,11 @@ jobs:
     with:
       action: apply
       install_openstack: true
+      devstack_mode: ${{ inputs.run_mode }}
       bootstrap_kubernetes: true
       apply_kubernetes: true
-      setup_storage: ${{ inputs.setup_storage }}
+      setup_storage: true
       validate_gpu: ${{ inputs.validate_gpu }}
-      minio_volume_size: ${{ inputs.minio_volume_size }}
-      force_cleanup: ${{ inputs.force_cleanup }}
+      minio_volume_size: "10"
+      force_cleanup: ${{ inputs.run_mode == 'reinstall' }}
     secrets: inherit

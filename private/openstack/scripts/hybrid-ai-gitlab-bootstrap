@@ -8,6 +8,7 @@ web_ready=false
 rails_cli_ready=false
 runner_token_ready=false
 image_change_blocked=false
+container_created=false
 
 save_status() {
   local phase="$1"
@@ -269,6 +270,7 @@ ensure_container() {
       --volume /srv/gitlab/data:/var/opt/gitlab \
       --shm-size 256m \
       "$GITLAB_IMAGE"
+    container_created=true
     return 0
   fi
 
@@ -290,6 +292,10 @@ ensure_container_config_applied() {
   if [[ "$current_checksum" == "$previous_checksum" ]]; then
     return 0
   fi
+  if [[ -z "$previous_checksum" && "$container_created" == "true" ]]; then
+    printf '%s\n' "$current_checksum" > "$checksum_file"
+    return 0
+  fi
 
   echo "GitLab omnibus config changed; restarting container to apply runtime defaults"
   docker restart gitlab >/dev/null
@@ -298,11 +304,11 @@ ensure_container_config_applied() {
 
 wait_for_web() {
   local i=0
-  local wait_seconds="${GITLAB_BOOTSTRAP_WAIT_SECONDS:-3600}"
+  local wait_seconds="${GITLAB_BOOTSTRAP_WAIT_SECONDS:-5400}"
   local deadline
 
   if ! [[ "$wait_seconds" =~ ^[0-9]+$ ]] || (( wait_seconds < 60 )); then
-    wait_seconds=3600
+    wait_seconds=5400
   fi
   deadline=$((SECONDS + wait_seconds))
   web_ready=false

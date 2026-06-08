@@ -58,6 +58,12 @@ variable "gitlab_http_allowed_cidrs" {
   default     = []
 }
 
+variable "harbor_http_allowed_cidrs" {
+  description = "CIDR ranges allowed to reach the standalone Harbor VM over HTTP/HTTPS. Used by the host reverse proxy; keep empty unless a local proxy needs direct VM access."
+  type        = list(string)
+  default     = []
+}
+
 variable "key_pair_name" {
   description = "OpenStack key pair name for provisioned instances."
   type        = string
@@ -83,13 +89,19 @@ variable "build_worker_count" {
 }
 
 variable "gpu_worker_count" {
-  description = "Number of GPU worker VMs. Keep zero until GPU quota is confirmed."
+  description = "Number of GPU worker VMs."
   type        = number
-  default     = 0
+  default     = 1
 }
 
 variable "gitlab_count" {
   description = "Number of standalone GitLab VMs."
+  type        = number
+  default     = 1
+}
+
+variable "harbor_count" {
+  description = "Number of standalone Harbor registry VMs."
   type        = number
   default     = 1
 }
@@ -142,6 +154,18 @@ variable "gitlab_flavor_name" {
   default     = "m1.large"
 }
 
+variable "harbor_image_name" {
+  description = "OpenStack image name for standalone Harbor registry VMs."
+  type        = string
+  default     = "ubuntu-22.04"
+}
+
+variable "harbor_flavor_name" {
+  description = "OpenStack flavor name for standalone Harbor registry VMs."
+  type        = string
+  default     = "m1.large"
+}
+
 variable "gitlab_container_image" {
   description = "GitLab container image pre-pulled by the standalone GitLab VM cloud-init bootstrap."
   type        = string
@@ -164,6 +188,12 @@ variable "gpu_driver_autoinstall" {
   description = "Allow GPU workers to use ubuntu-drivers autoinstall when an NVIDIA PCI device is detected."
   type        = bool
   default     = true
+}
+
+variable "gpu_driver_package" {
+  description = "Preferred NVIDIA driver apt package installed on GPU workers and GPU cache images. Leave empty to rely only on ubuntu-drivers autoinstall."
+  type        = string
+  default     = "nvidia-driver-595-open"
 }
 
 variable "enable_gpu_cuda_bootstrap" {

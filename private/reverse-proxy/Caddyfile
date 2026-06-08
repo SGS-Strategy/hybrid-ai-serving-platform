@@ -36,3 +36,14 @@ http://{$HA_GIT_DOMAIN:gitlab.intp.me} {
 		header_up X-Forwarded-Port 80
 	}
 }
+
+http://{$HA_HARBOR_DOMAIN:harbor.intp.me} {
+	encode zstd gzip
+	reverse_proxy {$HA_HARBOR_UPSTREAM:127.0.0.1:18084} {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Ssl off
+		header_up X-Forwarded-Port 80
+	}
+}

@@ -14,7 +14,7 @@ import urllib.request
 
 
 API_BASE = "https://api.cloudflare.com/client/v4"
-DEFAULT_RECORDS = ("openstack", "k8s", "grafana", "argocd", "gitlab")
+DEFAULT_RECORDS = ("openstack", "k8s", "grafana", "argocd", "gitlab", "harbor")
 
 
 def require_env(name: str) -> str:

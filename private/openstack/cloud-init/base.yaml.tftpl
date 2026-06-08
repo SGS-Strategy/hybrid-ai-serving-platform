@@ -30,6 +30,7 @@ packages:
   - nftables
   - numactl
   - nvme-cli
+  - openssh-server
   - open-iscsi
   - pciutils
   - python3
@@ -59,6 +60,7 @@ write_files:
       gitlab_container_image=${gitlab_container_image}
       enable_gpu_bootstrap=${enable_gpu_bootstrap}
       gpu_driver_autoinstall=${gpu_driver_autoinstall}
+      gpu_driver_package=${gpu_driver_package}
       enable_gpu_cuda_bootstrap=${enable_gpu_cuda_bootstrap}
       gpu_cuda_toolkit_package=${gpu_cuda_toolkit_package}
       gpu_cudnn_package=${gpu_cudnn_package}
@@ -153,6 +155,7 @@ write_files:
       install_node_dependencies="${install_node_dependencies}"
       gitlab_container_image="${gitlab_container_image}"
       enable_gpu_bootstrap="${enable_gpu_bootstrap}"
+      gpu_driver_package="${gpu_driver_package}"
       enable_gpu_training_bootstrap="${enable_gpu_training_bootstrap}"
 
       printf 'hybrid-ai node bootstrap start role=%s\n' "$role"
@@ -197,6 +200,10 @@ write_files:
 
       if [[ "$role" == "gitlab" ]]; then
         GITLAB_CONTAINER_IMAGE="$gitlab_container_image" /usr/local/sbin/hybrid-ai-gitlab-prereq-bootstrap || true
+      fi
+
+      if [[ "$role" == "harbor" ]]; then
+        /usr/local/sbin/hybrid-ai-harbor-prereq-bootstrap || true
       fi
 
       /usr/local/sbin/hybrid-ai-dependency-check
@@ -257,6 +264,49 @@ write_files:
         fi
       fi
       printf 'hybrid-ai GitLab prereq bootstrap complete\n'
+  - path: /usr/local/sbin/hybrid-ai-harbor-prereq-bootstrap
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      exec > >(tee -a /var/log/hybrid-ai-harbor-prereq-bootstrap.log) 2>&1
+      # shellcheck source=/usr/local/lib/hybrid-ai-bootstrap-common.sh disable=SC1091
+      . /usr/local/lib/hybrid-ai-bootstrap-common.sh
+
+      printf 'hybrid-ai Harbor prereq bootstrap start\n'
+      export DEBIAN_FRONTEND=noninteractive
+      export NEEDRESTART_MODE=a
+      cat >/etc/apt/apt.conf.d/99hybrid-ai-force-ipv4 <<'EOF'
+      Acquire::ForceIPv4 "true";
+      Acquire::Retries "5";
+      Dpkg::Lock::Timeout "900";
+      EOF
+
+      apt_get update -qq
+      apt_get install -y -qq ca-certificates curl docker.io openssh-server openssl python3 tzdata
+
+      if apt-cache show docker-compose-plugin >/dev/null 2>&1; then
+        apt_get install -y -qq docker-compose-plugin
+      elif apt-cache show docker-compose-v2 >/dev/null 2>&1; then
+        apt_get install -y -qq docker-compose-v2
+      elif apt-cache show docker-compose >/dev/null 2>&1; then
+        apt_get install -y -qq docker-compose
+      else
+        printf 'warn: no docker compose package is available from configured apt repositories\n'
+      fi
+
+      systemctl enable --now docker
+      install -d -m 0755 /opt/harbor /data/harbor /var/log/harbor
+      cat >/opt/hybrid-ai/harbor.env <<'EOF'
+      role=harbor
+      registry_data_dir=/data/harbor
+      installer_dir=/opt/harbor
+      EOF
+
+      docker --version || true
+      docker compose version || docker-compose --version || true
+      printf 'hybrid-ai Harbor prereq bootstrap complete\n'
   - path: /usr/local/sbin/hybrid-ai-gpu-bootstrap
     permissions: "0755"
     content: |
@@ -268,6 +318,7 @@ write_files:
       . /usr/local/lib/hybrid-ai-bootstrap-common.sh
 
       gpu_driver_autoinstall="${gpu_driver_autoinstall}"
+      gpu_driver_package="${gpu_driver_package}"
       enable_gpu_cuda_bootstrap="${enable_gpu_cuda_bootstrap}"
 
       printf 'hybrid-ai gpu bootstrap start\n'
@@ -297,6 +348,12 @@ write_files:
       fi
 
       if lspci -nn | grep -qi nvidia; then
+        if [[ -n "$gpu_driver_package" ]] && ! nvidia_smi_ready; then
+          driver_suffix="$${gpu_driver_package#nvidia-driver-}"
+          module_package="linux-modules-nvidia-$${driver_suffix}-generic"
+          apt_get install -y "$gpu_driver_package" "$module_package" || apt_get install -y "$gpu_driver_package" || true
+        fi
+
         if [[ "$gpu_driver_autoinstall" == "true" ]] && ! nvidia_smi_ready; then
           ubuntu-drivers autoinstall || true
         fi
@@ -650,6 +707,7 @@ write_files:
       role="$(cat /etc/hybrid-ai-node-role 2>/dev/null || printf unknown)"
       enable_gpu_cuda_bootstrap="${enable_gpu_cuda_bootstrap}"
       enable_gpu_training_bootstrap="${enable_gpu_training_bootstrap}"
+      gpu_driver_package="${gpu_driver_package}"
       gpu_cuda_toolkit_package="${gpu_cuda_toolkit_package}"
       gpu_cudnn_package="${gpu_cudnn_package}"
       missing=0
@@ -704,6 +762,9 @@ write_files:
       if [[ "$role" == "gpu-worker" ]]; then
         need_pkg nvidia-container-toolkit
         need_cmd hybrid-ai-training-run
+        if [[ -n "$gpu_driver_package" ]]; then
+          need_pkg "$gpu_driver_package"
+        fi
 
         if ! lspci -nn | grep -qi nvidia; then
           printf 'missing NVIDIA PCI device on gpu-worker\n' >&2
