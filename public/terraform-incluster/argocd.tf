@@ -1,11 +1,8 @@
-# Terraform이 helm_release로 EKS 클러스터 안에 Argo CD를 설치하는 구조
-
+# GitHub-hosted runner는 private EKS API에 접근할 수 없으므로, 이 Kubernetes/Helm Terraform 리소스는 SSM 관리 인스턴스에서 실행
 resource "kubernetes_namespace" "argocd" {
   metadata {
     name = "argocd"
   }
-
-  depends_on = [aws_eks_node_group.workloads]
 }
 
 resource "helm_release" "argocd" {

@@ -31,6 +31,34 @@ resource "aws_iam_role_policy" "eks_bootstrap_admin_describe_cluster" {
   policy = data.aws_iam_policy_document.eks_bootstrap_admin_describe_cluster.json
 }
 
+data "aws_iam_policy_document" "eks_bootstrap_admin_tfstate_access" {
+  statement {
+    effect  = "Allow"
+    actions = ["s3:ListBucket"]
+    resources = [
+      "arn:aws:s3:::sgs-hasp-tfstate",
+    ]
+  }
+
+  statement {
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject",
+    ]
+    resources = [
+      "arn:aws:s3:::sgs-hasp-tfstate/terraform/*",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "eks_bootstrap_admin_tfstate_access" {
+  name   = "${var.project_name}-eks-bootstrap-admin-tfstate-access"
+  role   = aws_iam_role.eks_bootstrap_admin.id
+  policy = data.aws_iam_policy_document.eks_bootstrap_admin_tfstate_access.json
+}
+
 data "aws_iam_policy_document" "eks_node_group_assume_bootstrap_admin" {
   statement {
     effect    = "Allow"

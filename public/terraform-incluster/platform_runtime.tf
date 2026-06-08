@@ -2,8 +2,6 @@ resource "kubernetes_namespace" "inference" {
   metadata {
     name = "inference"
   }
-
-  depends_on = [aws_eks_node_group.workloads]
 }
 
 resource "kubernetes_config_map" "inference_config" {
@@ -13,10 +11,8 @@ resource "kubernetes_config_map" "inference_config" {
   }
 
   data = {
-    BOOTSTRAP_SERVERS = aws_msk_cluster.main.bootstrap_brokers
+    BOOTSTRAP_SERVERS = data.terraform_remote_state.platform.outputs.msk_bootstrap_brokers
   }
-
-  depends_on = [aws_msk_cluster.main]
 }
 
 resource "helm_release" "aws_load_balancer_controller" {
@@ -25,24 +21,24 @@ resource "helm_release" "aws_load_balancer_controller" {
   chart      = "aws-load-balancer-controller"
   version    = "1.13.4"
   namespace  = "kube-system"
+  wait       = true
+  timeout    = 900
 
   values = [
     yamlencode({
-      clusterName = aws_eks_cluster.main.name
+      clusterName = data.terraform_remote_state.platform.outputs.eks_cluster_name
       region      = var.aws_region
-      vpcId       = aws_vpc.main.id
+      vpcId       = data.terraform_remote_state.platform.outputs.vpc_id
       serviceAccount = {
         create = true
         name   = "aws-load-balancer-controller"
         annotations = {
-          "eks.amazonaws.com/role-arn" = aws_iam_role.aws_load_balancer_controller.arn
+          "eks.amazonaws.com/role-arn" = data.terraform_remote_state.platform.outputs.aws_load_balancer_controller_role_arn
         }
       }
+      nodeSelector = {
+        workload = "system"
+      }
     })
-  ]
-
-  depends_on = [
-    aws_eks_node_group.workloads,
-    aws_iam_role_policy_attachment.aws_load_balancer_controller,
   ]
 }

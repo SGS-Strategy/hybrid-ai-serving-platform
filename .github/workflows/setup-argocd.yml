@@ -119,6 +119,7 @@ jobs:
           repo_secret_name = f"repo-{os.environ['GITHUB_REPOSITORY'].replace('/', '-')}"
           commands = [
               "set -euo pipefail",
+              "if ! command -v kubectl >/dev/null 2>&1; then curl -fsSLo /tmp/kubectl https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl && chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; fi",
               "export KUBECONFIG=/tmp/eks-kubeconfig",
               f"ASSUME_ROLE_OUTPUT=$(aws sts assume-role --role-arn {os.environ['BOOTSTRAP_ROLE_ARN']} --role-session-name argocd-root-app --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)",
               "if [ -z \"$ASSUME_ROLE_OUTPUT\" ] || [ \"$ASSUME_ROLE_OUTPUT\" = \"None\" ]; then echo 'Failed to assume bootstrap role.'; exit 1; fi",
