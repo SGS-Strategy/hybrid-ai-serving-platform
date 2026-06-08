@@ -1,4 +1,4 @@
-name: Run Public Terraform
+name: Public Terraform Deploy
 
 on:
   workflow_dispatch:
