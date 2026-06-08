@@ -5,6 +5,7 @@ IFS=$'\n\t'
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MODE="${HA_PRIVATE_CLOUD_RUN_MODE:-apply}"
 VALIDATE_GPU="${HA_PRIVATE_CLOUD_VALIDATE_GPU:-false}"
+REQUIRE_BACKEND_CONFIG=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     apply|reinstall)
@@ -20,8 +21,12 @@ while [[ $# -gt 0 ]]; do
       VALIDATE_GPU=true
       shift
       ;;
+    --require-backend-config)
+      REQUIRE_BACKEND_CONFIG=true
+      shift
+      ;;
     -h|--help)
-      printf 'usage: ha apply [--run-mode apply|reinstall] [--validate-gpu]\n'
+      printf 'usage: ha apply [--run-mode apply|reinstall] [--validate-gpu] [--require-backend-config]\n'
       exit 0
       ;;
     *)
@@ -804,8 +809,8 @@ terraform_apply() {
   local backend_config="${TF_BACKEND_CONFIG:-}"
   local backend_config_compact="${backend_config//[[:space:]]/}"
 
-  if [[ "${GITHUB_ACTIONS:-false}" == "true" && -z "$backend_config_compact" ]]; then
-    echo "TF_BACKEND_CONFIG is required for GitHub Actions apply so Terraform uses the persisted state backend" >&2
+  if [[ "$REQUIRE_BACKEND_CONFIG" == "true" && -z "$backend_config_compact" ]]; then
+    echo "TF_BACKEND_CONFIG is required when --require-backend-config is set" >&2
     exit 1
   fi
 

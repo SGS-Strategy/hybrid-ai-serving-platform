@@ -105,7 +105,6 @@ jobs:
             printf '%s=%q\n' "$name" "$value" >> "$env_file"
           }
 
-          write_env GITHUB_ACTIONS "true"
           write_env GITHUB_RUN_ID "$GITHUB_RUN_ID"
           write_env GITHUB_RUN_ATTEMPT "$GITHUB_RUN_ATTEMPT"
           write_env GITHUB_SHA "$GITHUB_SHA"
@@ -331,14 +330,14 @@ jobs:
               ./ha ci
               ;;
             apply)
-              args=(apply --run-mode "$run_mode")
+              args=(apply --run-mode "$run_mode" --require-backend-config)
               if [[ "$validate_gpu" == "true" ]]; then
                 args+=(--validate-gpu)
               fi
               ./ha "${args[@]}"
               ;;
             destroy)
-              args=(destroy)
+              args=(destroy --require-backend-config)
               if [[ "$cleanup_devstack" == "true" ]]; then
                 args+=(--cleanup-devstack)
               fi

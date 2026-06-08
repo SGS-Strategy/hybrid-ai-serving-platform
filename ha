@@ -71,8 +71,8 @@ Usage:
   ha doctor
   ha ci
   ha test [--strict] [--terraform-init] [--integration]
-  ha apply [--run-mode apply|reinstall] [--validate-gpu]
-  ha destroy [--cleanup-devstack]
+  ha apply [--run-mode apply|reinstall] [--validate-gpu] [--require-backend-config]
+  ha destroy [--cleanup-devstack] [--require-backend-config]
   ha up local|lxd|openstack-local|openstack|openstack-kubernetes|kubernetes|storage|gpu|all [--auto-approve]
   ha prod check
   ha env init|check|path|example|secret-example
@@ -457,8 +457,12 @@ _ha() {
   apply_opts=(
     '--run-mode:apply from existing DevStack or reinstall DevStack first'
     '--validate-gpu:run GPU validation after apply'
+    '--require-backend-config:fail if Terraform backend config is empty'
   )
-  destroy_opts=('--cleanup-devstack:remove local DevStack container after Terraform destroy')
+  destroy_opts=(
+    '--cleanup-devstack:remove local DevStack container after Terraform destroy'
+    '--require-backend-config:fail if Terraform backend config is empty'
+  )
   up_targets=(local lxd server openstack-local devstack openstack openstack-kubernetes openstack-k8s terraform kubernetes foundation base storage gpu gpu-worker k8s all)
   up_opts=('--auto-approve:apply OpenStack Terraform without prompting')
   prod_actions=(check)
@@ -1238,7 +1242,22 @@ test_terraform_static() {
     return
   fi
 
-  if output="$(terraform -chdir="$HA_OPENSTACK_DIR" fmt -check -recursive 2>&1)"; then
+  local terraform_fmt_files=()
+  local terraform_path
+  local terraform_relpath
+
+  while IFS= read -r terraform_path; do
+    case "$terraform_path" in
+      private/openstack/*.tf|private/openstack/*.tfvars)
+        terraform_relpath="${terraform_path#private/openstack/}"
+        terraform_fmt_files+=("$terraform_relpath")
+        ;;
+    esac
+  done < <(git -C "$HA_PROJECT_ROOT" ls-files private/openstack)
+
+  if [[ "${#terraform_fmt_files[@]}" -eq 0 ]]; then
+    test_skip "terraform fmt (no tracked Terraform files)"
+  elif output="$(terraform -chdir="$HA_OPENSTACK_DIR" fmt -check "${terraform_fmt_files[@]}" 2>&1)"; then
     test_ok "terraform fmt"
   else
     [[ -z "$output" ]] || info "$output"

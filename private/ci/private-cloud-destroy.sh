@@ -9,10 +9,11 @@ export TF_IN_AUTOMATION="${TF_IN_AUTOMATION:-true}"
 export TF_INPUT="${TF_INPUT:-false}"
 
 cleanup_devstack="${HA_PRIVATE_CLOUD_CLEANUP_DEVSTACK:-false}"
+require_backend_config=false
 
 usage() {
   cat >&2 <<'EOF'
-usage: ha destroy [--cleanup-devstack]
+usage: ha destroy [--cleanup-devstack] [--require-backend-config]
 EOF
 }
 
@@ -24,6 +25,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --cleanup-devstack)
       cleanup_devstack="true"
+      shift
+      ;;
+    --require-backend-config)
+      require_backend_config=true
       shift
       ;;
     -h|--help)
@@ -89,8 +94,8 @@ terraform_init() {
   local backend_config="${TF_BACKEND_CONFIG:-}"
   local backend_config_compact="${backend_config//[[:space:]]/}"
 
-  if [[ "${GITHUB_ACTIONS:-false}" == "true" && -z "$backend_config_compact" ]]; then
-    echo "TF_BACKEND_CONFIG is required for GitHub Actions destroy so Terraform uses the persisted state backend" >&2
+  if [[ "$require_backend_config" == "true" && -z "$backend_config_compact" ]]; then
+    echo "TF_BACKEND_CONFIG is required when --require-backend-config is set" >&2
     exit 1
   fi
 
