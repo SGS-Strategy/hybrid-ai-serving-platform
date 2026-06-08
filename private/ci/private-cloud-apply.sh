@@ -1268,6 +1268,7 @@ prepare_noninteractive_backend_init() {
 
 terraform_apply() {
   local effective_build_worker_count effective_gpu_worker_count effective_gitlab_count effective_harbor_count
+  local effective_install_node_dependencies
   local key_pair_name
   local apply_prefix
   ensure_ssh_key
@@ -1289,6 +1290,12 @@ terraform_apply() {
   effective_gpu_worker_count="$(effective_worker_count gpu_worker_count "${TF_VAR_gpu_worker_count}" "$apply_prefix")"
   effective_gitlab_count="$(effective_worker_count gitlab_count "${TF_VAR_gitlab_count}" "$apply_prefix")"
   effective_harbor_count="$(effective_worker_count harbor_count "${TF_VAR_harbor_count}" "$apply_prefix")"
+  effective_install_node_dependencies="$(terraform_var_value install_node_dependencies true private-cloud.auto.tfvars)"
+  if [[ -n "${PRIVATE_CLOUD_TFVARS:-}" && "$apply_prefix" == *-actions ]]; then
+    if ! terraform_tfvars_has_var install_node_dependencies private-cloud.auto.tfvars; then
+      effective_install_node_dependencies="false"
+    fi
+  fi
   public_network_id="$(lxc exec ha-openstack -- sudo -u stack -H bash -lc 'cd /opt/stack/devstack && set +u && source openrc admin admin >/dev/null && set -u && openstack network show public -f value -c id')"
   public_subnet_id="$(lxc exec ha-openstack -- sudo -u stack -H bash -lc 'cd /opt/stack/devstack && set +u && source openrc admin admin >/dev/null && set -u && openstack subnet list --network public --ip-version 4 -f value -c ID | head -n 1')"
   public_subnet_cidr="$(lxc exec ha-openstack -- sudo -u stack -H bash -lc "cd /opt/stack/devstack && set +u && source openrc admin admin >/dev/null && set -u && openstack subnet show '${public_subnet_id}' -f value -c cidr")"
@@ -1296,6 +1303,7 @@ terraform_apply() {
     printf 'external_network_id = "%s"\n' "$public_network_id"
     printf 'floating_ip_pool = "public"\n'
     printf 'assign_floating_ips = true\n'
+    printf 'install_node_dependencies = %s\n' "${effective_install_node_dependencies}"
     printf 'ssh_allowed_cidrs = ["%s"]\n' "$public_subnet_cidr"
     printf 'gitlab_http_allowed_cidrs = ["%s"]\n' "$public_subnet_cidr"
     printf 'control_plane_image_name = "%s"\n' "${TF_VAR_control_plane_image_name}"
@@ -1894,13 +1902,22 @@ validate_gpu_lightweight() {
   kubectl -n kube-system get pods -o wide
 }
 
+setup_registry_services_parallel() {
+  local rc=0
+
+  phase_bg setup_gitlab setup_gitlab
+  phase_bg setup_harbor setup_harbor
+  wait_phase_bg setup_gitlab || rc=1
+  wait_phase_bg setup_harbor || rc=1
+  return "$rc"
+}
+
 apply_jobs() {
   phase prepare_cached_images prepare_cached_images
   phase terraform_apply terraform_apply
   phase bootstrap_k8s bootstrap_k8s
   phase setup_storage setup_storage
-  phase setup_gitlab setup_gitlab
-  phase setup_harbor setup_harbor
+  phase setup_registry_services setup_registry_services_parallel
   phase setup_model_build_platform setup_model_build_platform
   if [[ "${VALIDATE_GPU}" == "true" ]]; then
     phase validate_gpu_lightweight validate_gpu_lightweight

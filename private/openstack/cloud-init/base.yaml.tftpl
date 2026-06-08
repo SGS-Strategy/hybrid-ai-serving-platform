@@ -1,4 +1,5 @@
 #cloud-config
+%{ if install_node_dependencies == "true" ~}
 package_update: true
 package_upgrade: false
 
@@ -46,6 +47,11 @@ packages:
   - xfsprogs
   - xz-utils
   - zip
+%{ else ~}
+package_update: false
+package_upgrade: false
+packages: []
+%{ endif ~}
 
 write_files:
   - path: /etc/hybrid-ai-node-role
