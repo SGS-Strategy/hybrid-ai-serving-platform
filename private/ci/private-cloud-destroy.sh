@@ -5,6 +5,8 @@ IFS=$'\n\t'
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OPENSTACK_DIR="${ROOT}/private/openstack"
 PATH="${ROOT}/.ha/bin:${PATH}"
+export TF_IN_AUTOMATION="${TF_IN_AUTOMATION:-true}"
+export TF_INPUT="${TF_INPUT:-false}"
 
 cleanup_devstack="${HA_PRIVATE_CLOUD_CLEANUP_DEVSTACK:-false}"
 
@@ -44,6 +46,7 @@ require_tool() {
 }
 
 write_tfvars_if_present() {
+  rm -f "${OPENSTACK_DIR}/backend.generated.tf" "${OPENSTACK_DIR}/backend.hcl" "${OPENSTACK_DIR}/private-cloud.auto.tfvars"
   if [[ -n "${PRIVATE_CLOUD_TFVARS:-}" ]]; then
     printf '%s' "$PRIVATE_CLOUD_TFVARS" > "${OPENSTACK_DIR}/private-cloud.auto.tfvars"
   fi
@@ -83,12 +86,20 @@ prepare_ssh_public_key() {
 }
 
 terraform_init() {
-  if [[ -n "${TF_BACKEND_CONFIG:-}" ]]; then
+  local backend_config="${TF_BACKEND_CONFIG:-}"
+  local backend_config_compact="${backend_config//[[:space:]]/}"
+
+  if [[ "${GITHUB_ACTIONS:-false}" == "true" && -z "$backend_config_compact" ]]; then
+    echo "TF_BACKEND_CONFIG is required for GitHub Actions destroy so Terraform uses the persisted state backend" >&2
+    exit 1
+  fi
+
+  if [[ -n "$backend_config_compact" ]]; then
     printf 'terraform {\n  backend "%s" {}\n}\n' "${TF_BACKEND_TYPE:-local}" > "${OPENSTACK_DIR}/backend.generated.tf"
-    printf '%s' "$TF_BACKEND_CONFIG" > "${OPENSTACK_DIR}/backend.hcl"
-    terraform -chdir="$OPENSTACK_DIR" init -reconfigure -backend-config=backend.hcl
+    printf '%s' "$backend_config" > "${OPENSTACK_DIR}/backend.hcl"
+    terraform -chdir="$OPENSTACK_DIR" init -input=false -reconfigure -backend-config=backend.hcl
   else
-    terraform -chdir="$OPENSTACK_DIR" init -reconfigure
+    terraform -chdir="$OPENSTACK_DIR" init -input=false -reconfigure
   fi
 }
 
@@ -123,7 +134,7 @@ main() {
   terraform_init
 
   log "terraform destroy"
-  terraform -chdir="$OPENSTACK_DIR" destroy -auto-approve
+  terraform -chdir="$OPENSTACK_DIR" destroy -input=false -auto-approve
 
   if [[ "$cleanup_devstack" == "true" ]]; then
     require_tool lxc

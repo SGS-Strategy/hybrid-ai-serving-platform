@@ -44,6 +44,8 @@ LOG_DIR="${ROOT}/.ha/ci/runs/${RUN_ID}"
 TIMINGS="${LOG_DIR}/timings.tsv"
 mkdir -p "${LOG_DIR}" "${ROOT}/.ha/openstack" "${ROOT}/.ha/ssh"
 PATH="${ROOT}/.ha/bin:${PATH}"
+export TF_IN_AUTOMATION="${TF_IN_AUTOMATION:-true}"
+export TF_INPUT="${TF_INPUT:-false}"
 
 HA_DEVSTACK_PASSWORD="${HA_DEVSTACK_PASSWORD:-hybrid-ai-devstack}"
 PRIVATE_CLOUD_BASE_DOMAIN="${PRIVATE_CLOUD_BASE_DOMAIN:-intp.me}"
@@ -799,12 +801,20 @@ terraform_apply() {
     printf 'harbor_flavor_name = "%s"\n' "${HA_DEVSTACK_HARBOR_FLAVOR_NAME}"
     printf 'harbor_http_allowed_cidrs = ["%s"]\n' "$public_subnet_cidr"
   } >zz-local-devstack.auto.tfvars
-  if [[ -n "${TF_BACKEND_CONFIG:-}" ]]; then
+  local backend_config="${TF_BACKEND_CONFIG:-}"
+  local backend_config_compact="${backend_config//[[:space:]]/}"
+
+  if [[ "${GITHUB_ACTIONS:-false}" == "true" && -z "$backend_config_compact" ]]; then
+    echo "TF_BACKEND_CONFIG is required for GitHub Actions apply so Terraform uses the persisted state backend" >&2
+    exit 1
+  fi
+
+  if [[ -n "$backend_config_compact" ]]; then
     printf 'terraform {\n  backend "%s" {}\n}\n' "${TF_BACKEND_TYPE:-local}" > backend.generated.tf
-    printf '%s' "${TF_BACKEND_CONFIG}" > backend.hcl
-    terraform init -reconfigure -backend-config=backend.hcl
+    printf '%s' "$backend_config" > backend.hcl
+    terraform init -input=false -reconfigure -backend-config=backend.hcl
   else
-    terraform init
+    terraform init -input=false -reconfigure
   fi
   legacy_addresses="$(terraform state list 2>/dev/null | grep '^openstack_compute_floatingip_associate_v2\.' || true)"
   if [[ -n "${legacy_addresses}" ]]; then
@@ -815,8 +825,8 @@ terraform_apply() {
   if ! terraform state show -no-color openstack_compute_keypair_v2.admin >/dev/null 2>&1; then
     terraform import openstack_compute_keypair_v2.admin hybrid-ai-private-admin >/dev/null 2>&1 || true
   fi
-  terraform plan -out=private-cloud.tfplan
-  terraform apply -auto-approve private-cloud.tfplan
+  terraform plan -input=false -out=private-cloud.tfplan
+  terraform apply -input=false -auto-approve private-cloud.tfplan
   terraform output -json >"${TF_OUTPUT_JSON}"
 }
 
