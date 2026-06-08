@@ -1,0 +1,40 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: model-build-job
+  namespace: default
+
+spec:
+  entrypoint: model-build
+
+  imagePullSecrets:
+  - name: harbor-secret
+
+  templates:
+  - name: model-build
+    container:
+      image: 192.168.49.2:30002/kamp/model-build-image:v2
+      imagePullPolicy: Always
+
+      command:
+      - python
+      - model_build.py
+
+      env:
+      - name: MINIO_ENDPOINT
+        value: "minio.minio.svc.cluster.local:9000"
+
+      - name: MINIO_ACCESS_KEY
+        value: "minioadmin"
+
+      - name: MINIO_SECRET_KEY
+        value: "minioadmin123"
+
+      resources:
+        requests:
+          memory: "2Gi"
+          cpu: "1"
+
+        limits:
+          memory: "4Gi"
+          cpu: "2"
