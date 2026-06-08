@@ -39,11 +39,13 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Write terraform.tfvars from secret
-        if: ${{ secrets.PUBLIC_TERRAFORM_TFVARS != '' }}
         env:
           TFVARS_CONTENT: ${{ secrets.PUBLIC_TERRAFORM_TFVARS }}
         working-directory: public/terraform
-        run: printf '%s\n' "$TFVARS_CONTENT" > terraform.tfvars
+        run: |
+          if [[ -n "$TFVARS_CONTENT" ]]; then
+            printf '%s\n' "$TFVARS_CONTENT" > terraform.tfvars
+          fi
 
       - name: Terraform fmt check
         working-directory: public/terraform
