@@ -174,7 +174,7 @@ variable "msk_ebs_volume_size" {
 variable "manage_msk_topics" {
   description = "Whether Terraform should reconcile MSK topics through the AWS Kafka topic API"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "msk_topic_replication_factor" {
@@ -245,7 +245,7 @@ variable "additional_eks_admin_role_arns" {
 variable "enable_site_to_site_vpn" {
   description = "Whether to create the Site-to-Site VPN resources"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "customer_gateways" {
