@@ -17,11 +17,10 @@ terraform {
   }
 
   backend "s3" {
-    bucket       = "sgs-hasp-tfstate"
-    key          = "terraform/incluster.tfstate"
-    region       = "ap-northeast-2"
-    use_lockfile = true
-    encrypt      = true
+    bucket  = "sgs-hasp-tfstate"
+    key     = "terraform/incluster.tfstate"
+    region  = "ap-northeast-2"
+    encrypt = true
   }
 }
 
