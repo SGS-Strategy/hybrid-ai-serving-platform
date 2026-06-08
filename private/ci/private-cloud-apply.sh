@@ -766,6 +766,49 @@ devstack_apply_check() {
   verify_devstack
 }
 
+local_backend_state_path() {
+  local backend_hcl="$1"
+
+  [[ "${TF_BACKEND_TYPE:-local}" == "local" ]] || return 1
+  awk '
+    /^[[:space:]]*path[[:space:]]*=/ {
+      sub(/^[^=]*=/, "", $0)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+      gsub(/^"|"$/, "", $0)
+      print $0
+      exit
+    }
+  ' "$backend_hcl"
+}
+
+prepare_noninteractive_backend_init() {
+  local module_dir="$1"
+  local backend_hcl="$2"
+  local backend_path
+  local archive_dir
+
+  backend_path="$(local_backend_state_path "$backend_hcl" || true)"
+  [[ -n "$backend_path" ]] || return 1
+  if [[ "$backend_path" != /* ]]; then
+    backend_path="${module_dir}/${backend_path}"
+  fi
+
+  mkdir -p "$(dirname "$backend_path")"
+  rm -f "${module_dir}/.terraform/terraform.tfstate"
+
+  if [[ -s "$backend_path" ]]; then
+    if [[ -s "${module_dir}/terraform.tfstate" ]]; then
+      archive_dir="${ROOT}/.ha/openstack/state-archive/$(date -u +%Y%m%dT%H%M%SZ)"
+      mkdir -p "$archive_dir"
+      mv "${module_dir}/terraform.tfstate" "${archive_dir}/terraform.tfstate"
+      log "archived stale root Terraform state before backend reconfigure: ${archive_dir}/terraform.tfstate"
+    fi
+    return 0
+  fi
+
+  return 1
+}
+
 terraform_apply() {
   ensure_ssh_key
   cd "${ROOT}/private/openstack"
@@ -817,8 +860,13 @@ terraform_apply() {
   if [[ -n "$backend_config_compact" ]]; then
     printf 'terraform {\n  backend "%s" {}\n}\n' "${TF_BACKEND_TYPE:-local}" > backend.generated.tf
     printf '%s' "$backend_config" > backend.hcl
-    terraform init -input=false -reconfigure -backend-config=backend.hcl
+    if prepare_noninteractive_backend_init "$PWD" "${PWD}/backend.hcl"; then
+      terraform init -input=false -reconfigure -backend-config=backend.hcl
+    else
+      terraform init -input=false -migrate-state -force-copy -backend-config=backend.hcl
+    fi
   else
+    rm -f .terraform/terraform.tfstate
     terraform init -input=false -reconfigure
   fi
   legacy_addresses="$(terraform state list 2>/dev/null | grep '^openstack_compute_floatingip_associate_v2\.' || true)"
