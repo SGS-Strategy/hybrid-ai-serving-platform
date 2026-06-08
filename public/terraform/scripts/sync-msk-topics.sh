@@ -48,7 +48,7 @@ if [ "${MSK_TOPIC_REPLICATION_FACTOR}" -lt 1 ]; then
 fi
 
 has_configs="$(printf '%s' "$MSK_TOPIC_CONFIGS_JSON" | jq 'length > 0')"
-topic_configs_b64="$(printf '%s' "$MSK_TOPIC_CONFIGS_JSON" | jq -r 'to_entries | map("\(.key)=\(.value)") | join("\n")' | base64 | tr -d '\n')"
+topic_configs_b64="$(printf '%s' "$MSK_TOPIC_CONFIGS_JSON" | base64 | tr -d '\n')"
 
 printf '%s' "$MSK_TOPICS_JSON" | jq -r 'to_entries[] | @base64' | while IFS= read -r entry; do
   topic_name="$(printf '%s' "$entry" | base64 -d | jq -r '.key')"
