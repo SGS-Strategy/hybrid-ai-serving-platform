@@ -265,9 +265,98 @@ cleanup_kubernetes_best_effort() {
   kubectl delete pv --all --ignore-not-found=true --timeout=120s || true
 }
 
+cleanup_openstack_orphans_best_effort() {
+  local prefix="${HA_PRIVATE_CLOUD_RESOURCE_PREFIX:-${TF_VAR_project_name:-hybrid-ai-private}}"
+
+  command -v lxc >/dev/null 2>&1 || return 0
+  lxc info ha-openstack >/dev/null 2>&1 || return 0
+
+  log "cleaning orphan OpenStack resources with prefix ${prefix}"
+  lxc exec ha-openstack -- sudo -u stack -H bash -s -- "$prefix" <<'CLEANUP_OPENSTACK_ORPHANS'
+set -euo pipefail
+prefix="$1"
+cd /opt/stack/devstack
+set +u
+source openrc admin admin >/dev/null
+set -u
+
+network_id="$(openstack network list -f value -c ID -c Name | awk -v n="${prefix}-net" '$2 == n {print $1; exit}')"
+network_port_ids=""
+if [[ -n "$network_id" ]]; then
+  network_port_ids="$(openstack port list --network "$network_id" -f value -c ID)"
+fi
+if [[ -n "$network_port_ids" ]]; then
+  fip_ids="$(openstack floating ip list -f value -c ID -c Port | awk -v ports="$network_port_ids" '
+    BEGIN {
+      split(ports, lines, "\n")
+      for (idx in lines) {
+        if (lines[idx] != "") {
+          keep[lines[idx]] = 1
+        }
+      }
+    }
+    $2 in keep {print $1}
+  ')"
+  if [[ -n "$fip_ids" ]]; then
+    while IFS= read -r id; do
+      [[ -n "$id" ]] && openstack floating ip delete "$id" || true
+    done <<<"$fip_ids"
+  fi
+fi
+
+server_ids="$(openstack server list -f value -c ID -c Name | awk -v p="$prefix" '$2 ~ "^" p {print $1}')"
+if [[ -n "$server_ids" ]]; then
+  while IFS= read -r id; do
+    [[ -n "$id" ]] && openstack server delete "$id" || true
+  done <<<"$server_ids"
+  for _ in {1..60}; do
+    remaining="$(openstack server list -f value -c ID -c Name | awk -v p="$prefix" '$2 ~ "^" p {print $1}' | wc -l)"
+    [[ "$remaining" -eq 0 ]] && break
+    sleep 5
+  done
+fi
+
+router_id="$(openstack router list -f value -c ID -c Name | awk -v n="${prefix}-router" '$2 == n {print $1; exit}')"
+subnet_id="$(openstack subnet list -f value -c ID -c Name | awk -v n="${prefix}-subnet" '$2 == n {print $1; exit}')"
+if [[ -n "$router_id" && -n "$subnet_id" ]]; then
+  openstack router remove subnet "$router_id" "$subnet_id" || true
+fi
+if [[ -n "$router_id" ]]; then
+  openstack router delete "$router_id" || true
+fi
+
+if [[ -n "$network_id" ]]; then
+  port_ids="$(openstack port list --network "$network_id" -f value -c ID)"
+  if [[ -n "$port_ids" ]]; then
+    while IFS= read -r id; do
+      [[ -n "$id" ]] && openstack port delete "$id" || true
+    done <<<"$port_ids"
+  fi
+fi
+if [[ -n "$subnet_id" ]]; then
+  openstack subnet delete "$subnet_id" || true
+fi
+if [[ -n "$network_id" ]]; then
+  openstack network delete "$network_id" || true
+fi
+
+sg_id="$(openstack security group list -f value -c ID -c Name | awk -v n="${prefix}-sg" '$2 == n {print $1; exit}')"
+if [[ -n "$sg_id" ]]; then
+  openstack security group delete "$sg_id" || true
+fi
+
+for key_name in "${prefix}-admin" hybrid-ai-actions-admin; do
+  if openstack keypair show "$key_name" >/dev/null 2>&1; then
+    openstack keypair delete "$key_name" || true
+  fi
+done
+CLEANUP_OPENSTACK_ORPHANS
+}
+
 main() {
   require_tool terraform
   require_tool python3
+  local destroy_rc
   prepare_local_devstack_env
   check_openstack_auth
   prepare_ssh_public_key
@@ -278,7 +367,12 @@ main() {
   terraform_init
 
   log "terraform destroy"
-  terraform -chdir="$OPENSTACK_DIR" destroy -input=false -auto-approve
+  destroy_rc=0
+  terraform -chdir="$OPENSTACK_DIR" destroy -input=false -auto-approve || destroy_rc="$?"
+  cleanup_openstack_orphans_best_effort
+  if [[ "$destroy_rc" -ne 0 ]]; then
+    exit "$destroy_rc"
+  fi
 
   if [[ "$cleanup_devstack" == "true" ]]; then
     require_tool lxc
