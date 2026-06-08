@@ -257,6 +257,7 @@ jobs:
               "kubectl get inferenceservice -n inference -o name 2>/dev/null | xargs -I{} kubectl patch {} -n inference -p '{\"metadata\":{\"finalizers\":[]}}' --type=merge || true",
               "kubectl delete inferenceservice --all -n inference --force --grace-period=0 || true",
               "for resource in $(kubectl api-resources --verbs=list --namespaced -o name 2>/dev/null); do kubectl get $resource -n inference -o name 2>/dev/null | xargs -I{} kubectl patch {} -n inference -p '{\"metadata\":{\"finalizers\":[]}}' --type=merge 2>/dev/null || true; done",
+              "kubectl delete pvc --all -n inference --wait --timeout=60s || true",
               "kubectl delete all --all -n inference --force --grace-period=0 || true",
               "kubectl patch namespace inference -p '{\"metadata\":{\"finalizers\":[]}}' --type=merge || true",
               "kubectl delete namespace inference --force --grace-period=0 || true",
