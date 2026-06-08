@@ -57,17 +57,106 @@ write_tfvars_if_present() {
   fi
 }
 
+devstack_openrc_password() {
+  command -v lxc >/dev/null 2>&1 || return 0
+  lxc exec ha-openstack -- sudo -u stack -H bash -lc 'cd /opt/stack/devstack && set +u && source openrc admin admin >/dev/null && printf "%s" "${OS_PASSWORD:-}"' 2>/dev/null || true
+}
+
 prepare_local_devstack_env() {
-  if [[ -z "${OS_AUTH_URL:-}" ]]; then
-    export OS_AUTH_URL="http://127.0.0.1:18081/identity/v3"
+  export OS_AUTH_URL="${HA_DEVSTACK_AUTH_URL:-http://127.0.0.1:18081/identity/v3}"
+  export OS_USERNAME="${HA_DEVSTACK_USERNAME:-admin}"
+  local devstack_password
+  local openrc_password
+
+  devstack_password="${HA_DEVSTACK_PASSWORD:-hybrid-ai-devstack}"
+  openrc_password="$(devstack_openrc_password)"
+  if [[ -n "$openrc_password" ]]; then
+    devstack_password="$openrc_password"
   fi
-  export OS_USERNAME="${OS_USERNAME:-admin}"
-  export OS_PASSWORD="${OS_PASSWORD:-${HA_DEVSTACK_PASSWORD:-hybrid-ai-devstack}}"
-  export OS_PROJECT_NAME="${OS_PROJECT_NAME:-admin}"
-  export OS_USER_DOMAIN_NAME="${OS_USER_DOMAIN_NAME:-Default}"
-  export OS_PROJECT_DOMAIN_NAME="${OS_PROJECT_DOMAIN_NAME:-Default}"
-  export OS_REGION_NAME="${OS_REGION_NAME:-RegionOne}"
+  export OS_PASSWORD="$devstack_password"
+  export OS_PROJECT_NAME="${HA_DEVSTACK_PROJECT_NAME:-admin}"
+  export OS_USER_DOMAIN_NAME="${HA_DEVSTACK_USER_DOMAIN_NAME:-Default}"
+  export OS_PROJECT_DOMAIN_NAME="${HA_DEVSTACK_PROJECT_DOMAIN_NAME:-Default}"
+  export OS_REGION_NAME="${HA_DEVSTACK_REGION_NAME:-RegionOne}"
   export OS_IDENTITY_API_VERSION="${OS_IDENTITY_API_VERSION:-3}"
+}
+
+check_openstack_auth() {
+  python3 - <<'PY'
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+required = [
+    "OS_AUTH_URL",
+    "OS_USERNAME",
+    "OS_PASSWORD",
+    "OS_PROJECT_NAME",
+    "OS_USER_DOMAIN_NAME",
+    "OS_PROJECT_DOMAIN_NAME",
+]
+missing = [name for name in required if not os.environ.get(name)]
+if missing:
+    print(f"OpenStack auth preflight failed: missing {', '.join(missing)}", file=sys.stderr)
+    sys.exit(1)
+
+auth_url = os.environ["OS_AUTH_URL"].rstrip("/")
+url = f"{auth_url}/auth/tokens"
+username = os.environ["OS_USERNAME"]
+project = os.environ["OS_PROJECT_NAME"]
+user_domain = os.environ["OS_USER_DOMAIN_NAME"]
+project_domain = os.environ["OS_PROJECT_DOMAIN_NAME"]
+payload = {
+    "auth": {
+        "identity": {
+            "methods": ["password"],
+            "password": {
+                "user": {
+                    "name": username,
+                    "domain": {"name": user_domain},
+                    "password": os.environ["OS_PASSWORD"],
+                }
+            },
+        },
+        "scope": {
+            "project": {
+                "name": project,
+                "domain": {"name": project_domain},
+            }
+        },
+    }
+}
+req = urllib.request.Request(
+    url,
+    data=json.dumps(payload).encode("utf-8"),
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=20) as response:
+        if response.status not in (201, 202):
+            print(f"OpenStack auth preflight failed: HTTP {response.status} for {url}", file=sys.stderr)
+            sys.exit(1)
+except urllib.error.HTTPError as exc:
+    body = exc.read().decode("utf-8", "replace")[:500]
+    print(
+        "OpenStack auth preflight failed: "
+        f"HTTP {exc.code} for {url} user={username} project={project} "
+        f"user_domain={user_domain} project_domain={project_domain}: {body}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+except Exception as exc:
+    print(
+        "OpenStack auth preflight failed: "
+        f"{exc} for {url} user={username} project={project} "
+        f"user_domain={user_domain} project_domain={project_domain}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+PY
 }
 
 prepare_ssh_public_key() {
@@ -178,7 +267,9 @@ cleanup_kubernetes_best_effort() {
 
 main() {
   require_tool terraform
+  require_tool python3
   prepare_local_devstack_env
+  check_openstack_auth
   prepare_ssh_public_key
   write_tfvars_if_present
   cleanup_kubernetes_best_effort
