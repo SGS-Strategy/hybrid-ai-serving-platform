@@ -25,6 +25,7 @@ HA_OPENSTACK_IMAGE_CACHE_DRIVER_PACKAGE="${HA_OPENSTACK_IMAGE_CACHE_DRIVER_PACKA
 HA_OPENSTACK_IMAGE_CACHE_CUDA_TOOLKIT_PACKAGE="${HA_OPENSTACK_IMAGE_CACHE_CUDA_TOOLKIT_PACKAGE:-${TF_VAR_gpu_cuda_toolkit_package:-cuda-toolkit-12-1}}"
 HA_OPENSTACK_IMAGE_CACHE_CUDNN_PACKAGE="${HA_OPENSTACK_IMAGE_CACHE_CUDNN_PACKAGE:-${TF_VAR_gpu_cudnn_package:-cudnn9-cuda-12}}"
 HA_OPENSTACK_IMAGE_CACHE_GITLAB_IMAGE="${HA_OPENSTACK_IMAGE_CACHE_GITLAB_IMAGE:-${TF_VAR_gitlab_container_image:-gitlab/gitlab-ce:18.11.4-ce.0}}"
+HA_OPENSTACK_IMAGE_CACHE_CONTROL_PLANE_NFS="${HA_OPENSTACK_IMAGE_CACHE_CONTROL_PLANE_NFS:-true}"
 HA_OPENSTACK_IMAGE_CACHE_TRAINING_PYTORCH_INDEX="${HA_OPENSTACK_IMAGE_CACHE_TRAINING_PYTORCH_INDEX:-${TF_VAR_gpu_training_pytorch_cuda_index_url:-https://download.pytorch.org/whl/cu121}}"
 HA_OPENSTACK_IMAGE_CACHE_TRAINING_PACKAGES_JSON="${HA_OPENSTACK_IMAGE_CACHE_TRAINING_PACKAGES_JSON:-${TF_VAR_gpu_training_python_packages:-}}"
 DEFAULT_OPENSTACK_IMAGE_CACHE_TRAINING_PACKAGES="torch==2.1.0+cu121
@@ -359,7 +360,9 @@ role_manifest() {
     printf 'common_packages=%s\n' "${COMMON_PACKAGES[*]}"
     case "$role" in
       control-plane)
-        printf 'control_plane_packages=nfs-kernel-server\n'
+        if [[ "$HA_OPENSTACK_IMAGE_CACHE_CONTROL_PLANE_NFS" == "true" ]]; then
+          printf 'control_plane_packages=nfs-kernel-server\n'
+        fi
         ;;
       gitlab)
         printf 'gitlab_image=%s\n' "$HA_OPENSTACK_IMAGE_CACHE_GITLAB_IMAGE"
@@ -610,7 +613,8 @@ cudnn_package="$6"
 pytorch_index="$7"
 training_packages="$8"
 dns_servers="$9"
-shift 9
+control_plane_nfs="${10}"
+shift 10
 common_packages=("$@")
 manifest="$(printf '%s' "$manifest" | base64 -d)"
 training_packages="$(printf '%s' "$training_packages" | base64 -d)"
@@ -719,8 +723,10 @@ apt_get install -y "${common_packages[@]}"
 
 case "$role" in
   control-plane)
-    apt_get install -y nfs-kernel-server
-    systemctl enable nfs-server >/dev/null 2>&1 || systemctl enable nfs-kernel-server >/dev/null 2>&1 || true
+    if [[ "$control_plane_nfs" == "true" ]]; then
+      apt_get install -y nfs-kernel-server
+      systemctl enable nfs-server >/dev/null 2>&1 || systemctl enable nfs-kernel-server >/dev/null 2>&1 || true
+    fi
     ;;
   gitlab)
     apt_get install -y ca-certificates curl docker.io openssh-server python3 tzdata
@@ -829,6 +835,7 @@ build_cache_image() {
         "$HA_OPENSTACK_IMAGE_CACHE_TRAINING_PYTORCH_INDEX" \
         "$training_packages_b64" \
         "$dns_servers_b64" \
+        "$HA_OPENSTACK_IMAGE_CACHE_CONTROL_PLANE_NFS" \
         "${COMMON_PACKAGES[@]}"
 
     wait_server_status "$server_name" SHUTOFF

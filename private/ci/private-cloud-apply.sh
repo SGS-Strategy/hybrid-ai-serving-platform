@@ -631,6 +631,10 @@ prepare_cached_images() {
   export HA_OPENSTACK_IMAGE_CACHE_DRIVER_PACKAGE
   export HA_OPENSTACK_IMAGE_CACHE_GITLAB_IMAGE="${GITLAB_IMAGE}"
   export HA_OPENSTACK_IMAGE_CACHE_SSH_KEY="${SSH_KEY}"
+  export HA_OPENSTACK_IMAGE_CACHE_CONTROL_PLANE_NFS="true"
+  if ! optional_apply_phase_enabled "${HA_PRIVATE_CLOUD_SETUP_STORAGE}"; then
+    HA_OPENSTACK_IMAGE_CACHE_CONTROL_PLANE_NFS="false"
+  fi
 
   args+=("control-plane=${TF_VAR_control_plane_image_name}")
   if [[ "${effective_build_worker_count}" != "0" ]]; then
