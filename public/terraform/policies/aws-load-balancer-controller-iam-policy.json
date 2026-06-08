@@ -173,6 +173,28 @@
     {
       "Effect": "Allow",
       "Action": [
+        "elasticloadbalancing:AddTags"
+      ],
+      "Resource": [
+        "arn:aws:elasticloadbalancing:*:*:loadbalancer/app/*/*",
+        "arn:aws:elasticloadbalancing:*:*:loadbalancer/net/*/*",
+        "arn:aws:elasticloadbalancing:*:*:targetgroup/*/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "elasticloadbalancing:CreateAction": [
+            "CreateLoadBalancer",
+            "CreateTargetGroup"
+          ]
+        },
+        "Null": {
+          "aws:RequestTag/elbv2.k8s.aws/cluster": "false"
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
         "elasticloadbalancing:AddTags",
         "elasticloadbalancing:RemoveTags"
       ],
