@@ -102,6 +102,10 @@ jobs:
 
           if [[ -z "${RUNNING_INSTANCE_IDS}" || "${RUNNING_INSTANCE_IDS}" == "None" ]]; then
             echo "No running EC2 instances found for tag ${SSM_BOOTSTRAP_TAG_KEY}=${SSM_BOOTSTRAP_TAG_VALUE}."
+            if [[ "${{ inputs.action }}" == "destroy" ]]; then
+              echo "value=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             exit 1
           fi
 
@@ -122,6 +126,10 @@ jobs:
 
           if [[ -z "${TARGET_INSTANCE_ID}" ]]; then
             echo "No SSM-managed running instance found for tag ${SSM_BOOTSTRAP_TAG_KEY}=${SSM_BOOTSTRAP_TAG_VALUE}."
+            if [[ "${{ inputs.action }}" == "destroy" ]]; then
+              echo "value=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             exit 1
           fi
 
@@ -224,7 +232,7 @@ jobs:
           exit 1
 
       - name: Delete ArgoCD apps before destroy
-        if: ${{ inputs.action == 'destroy' }}
+        if: ${{ inputs.action == 'destroy' && steps.resolve_instance.outputs.value != '' }}
         id: delete_argocd_apps
         env:
           TARGET_INSTANCE_ID: ${{ steps.resolve_instance.outputs.value }}
@@ -266,7 +274,7 @@ jobs:
           echo "command_id=${COMMAND_ID}" >> "$GITHUB_OUTPUT"
 
       - name: Wait for ArgoCD cleanup
-        if: ${{ inputs.action == 'destroy' }}
+        if: ${{ inputs.action == 'destroy' && steps.resolve_instance.outputs.value != '' }}
         env:
           COMMAND_ID: ${{ steps.delete_argocd_apps.outputs.command_id }}
           TARGET_INSTANCE_ID: ${{ steps.resolve_instance.outputs.value }}
@@ -299,6 +307,7 @@ jobs:
           done
 
       - name: Send in-cluster Terraform command through SSM
+        if: ${{ steps.resolve_instance.outputs.value != '' }}
         id: send_incluster
         env:
           TF_ACTION: ${{ inputs.action }}
@@ -349,6 +358,7 @@ jobs:
           echo "command_id=${COMMAND_ID}" >> "$GITHUB_OUTPUT"
 
       - name: Wait for in-cluster Terraform result
+        if: ${{ steps.resolve_instance.outputs.value != '' }}
         env:
           COMMAND_ID: ${{ steps.send_incluster.outputs.command_id }}
           TARGET_INSTANCE_ID: ${{ steps.resolve_instance.outputs.value }}
