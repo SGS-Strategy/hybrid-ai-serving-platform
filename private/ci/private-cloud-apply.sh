@@ -137,6 +137,9 @@ HA_PRIVATE_CLOUD_AUTO_EXPAND_QUOTA="${HA_PRIVATE_CLOUD_AUTO_EXPAND_QUOTA:-true}"
 HA_PRIVATE_CLOUD_QUOTA_HEADROOM_INSTANCES="${HA_PRIVATE_CLOUD_QUOTA_HEADROOM_INSTANCES:-3}"
 HA_PRIVATE_CLOUD_QUOTA_HEADROOM_CORES="${HA_PRIVATE_CLOUD_QUOTA_HEADROOM_CORES:-8}"
 HA_PRIVATE_CLOUD_QUOTA_HEADROOM_RAM_MB="${HA_PRIVATE_CLOUD_QUOTA_HEADROOM_RAM_MB:-16384}"
+HA_PRIVATE_CLOUD_SETUP_STORAGE="${HA_PRIVATE_CLOUD_SETUP_STORAGE:-auto}"
+HA_PRIVATE_CLOUD_SETUP_REGISTRY="${HA_PRIVATE_CLOUD_SETUP_REGISTRY:-auto}"
+HA_PRIVATE_CLOUD_SETUP_MODEL_BUILD="${HA_PRIVATE_CLOUD_SETUP_MODEL_BUILD:-auto}"
 
 printf 'phase\tseconds\tstatus\n' >"${TIMINGS}"
 
@@ -603,8 +606,21 @@ ENSURE_IMAGE
 
 prepare_cached_images() {
   local args=()
+  local apply_prefix effective_build_worker_count effective_gpu_worker_count effective_gitlab_count effective_harbor_count
 
   [[ "${MODE}" != "destroy" ]] || return 0
+  cd "${ROOT}/private/openstack"
+  rm -f private-cloud.auto.tfvars
+  if [[ -n "${PRIVATE_CLOUD_TFVARS:-}" ]]; then
+    printf '%s' "${PRIVATE_CLOUD_TFVARS}" > private-cloud.auto.tfvars
+  fi
+
+  apply_prefix="$(terraform_apply_prefix)"
+  effective_build_worker_count="$(effective_worker_count build_worker_count "${TF_VAR_build_worker_count}" "$apply_prefix")"
+  effective_gpu_worker_count="$(effective_worker_count gpu_worker_count "${TF_VAR_gpu_worker_count}" "$apply_prefix")"
+  effective_gitlab_count="$(effective_worker_count gitlab_count "${TF_VAR_gitlab_count}" "$apply_prefix")"
+  effective_harbor_count="$(effective_worker_count harbor_count "${TF_VAR_harbor_count}" "$apply_prefix")"
+
   export HA_OPENSTACK_IMAGE_CACHE_ENABLED
   export HA_OPENSTACK_IMAGE_CACHE_DIR
   export HA_OPENSTACK_IMAGE_CACHE_ENV="${IMAGE_CACHE_ENV}"
@@ -617,14 +633,16 @@ prepare_cached_images() {
   export HA_OPENSTACK_IMAGE_CACHE_SSH_KEY="${SSH_KEY}"
 
   args+=("control-plane=${TF_VAR_control_plane_image_name}")
-  args+=("build-worker=${TF_VAR_build_worker_image_name}")
-  if [[ "${TF_VAR_gpu_worker_count}" != "0" ]]; then
+  if [[ "${effective_build_worker_count}" != "0" ]]; then
+    args+=("build-worker=${TF_VAR_build_worker_image_name}")
+  fi
+  if [[ "${effective_gpu_worker_count}" != "0" ]]; then
     args+=("gpu-worker=${TF_VAR_gpu_worker_image_name}")
   fi
-  if [[ "${TF_VAR_gitlab_count}" != "0" ]]; then
+  if [[ "${effective_gitlab_count}" != "0" ]]; then
     args+=("gitlab=${TF_VAR_gitlab_image_name}")
   fi
-  if [[ "${TF_VAR_harbor_count}" != "0" ]]; then
+  if [[ "${effective_harbor_count}" != "0" ]]; then
     args+=("harbor=${TF_VAR_harbor_image_name}")
   fi
 
@@ -691,6 +709,40 @@ terraform_var_int() {
 
 terraform_apply_prefix() {
   terraform_var_value project_name hybrid-ai-private private-cloud.auto.tfvars zz-local-devstack.auto.tfvars
+}
+
+actions_lightweight_stack() {
+  local prefix
+
+  prefix="$(terraform_apply_prefix)"
+  [[ "$prefix" == *-actions ]]
+}
+
+optional_apply_phase_enabled() {
+  local setting="$1"
+
+  case "$setting" in
+    true) return 0 ;;
+    false) return 1 ;;
+    auto)
+      if actions_lightweight_stack; then
+        return 1
+      fi
+      return 0
+      ;;
+    *)
+      printf 'optional apply phase setting must be true, false, or auto; got: %s\n' "$setting" >&2
+      return 2
+      ;;
+  esac
+}
+
+skip_phase() {
+  local name="$1"
+  local reason="$2"
+
+  printf '%s\t0\tskipped\n' "${name}" >>"${TIMINGS}"
+  log "SKIP ${name}: ${reason}"
 }
 
 terraform_tfvars_has_var() {
@@ -1480,6 +1532,20 @@ set -euo pipefail
 cidr="$1"
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
+host="$(hostname)"
+short="$(hostname -s)"
+if ! grep -Eq "(^|[[:space:]])${short}([[:space:]]|$)" /etc/hosts; then
+  printf '127.0.1.1 %s %s\n' "$host" "$short" | sudo tee -a /etc/hosts >/dev/null
+fi
+apt_get() {
+  sudo apt-get \
+    -o Acquire::ForceIPv4=true \
+    -o Acquire::Retries=5 \
+    -o Dpkg::Lock::Timeout=900 \
+    -o Dpkg::Options::=--force-confdef \
+    -o Dpkg::Options::=--force-confnew \
+    "$@"
+}
 if command -v cloud-init >/dev/null 2>&1; then
   cloud-init status --wait >/dev/null 2>&1 || true
 fi
@@ -1490,8 +1556,8 @@ for _ in {1..180}; do
   sleep 5
 done
 if ! sudo test -x /usr/sbin/exportfs; then
-  sudo apt-get update -qq
-  sudo apt-get install -y -qq nfs-common nfs-kernel-server
+  apt_get update -qq
+  apt_get install -y -qq nfs-common nfs-kernel-server
 fi
 sudo mkdir -p /mnt/nfs/hybrid-ai /etc/exports.d
 sudo chown nobody:nogroup /mnt/nfs/hybrid-ai
@@ -1916,9 +1982,21 @@ apply_jobs() {
   phase prepare_cached_images prepare_cached_images
   phase terraform_apply terraform_apply
   phase bootstrap_k8s bootstrap_k8s
-  phase setup_storage setup_storage
-  phase setup_registry_services setup_registry_services_parallel
-  phase setup_model_build_platform setup_model_build_platform
+  if optional_apply_phase_enabled "${HA_PRIVATE_CLOUD_SETUP_STORAGE}"; then
+    phase setup_storage setup_storage
+  else
+    skip_phase setup_storage "disabled for lightweight Actions stack"
+  fi
+  if optional_apply_phase_enabled "${HA_PRIVATE_CLOUD_SETUP_REGISTRY}"; then
+    phase setup_registry_services setup_registry_services_parallel
+  else
+    skip_phase setup_registry_services "disabled for lightweight Actions stack"
+  fi
+  if optional_apply_phase_enabled "${HA_PRIVATE_CLOUD_SETUP_MODEL_BUILD}"; then
+    phase setup_model_build_platform setup_model_build_platform
+  else
+    skip_phase setup_model_build_platform "disabled for lightweight Actions stack"
+  fi
   if [[ "${VALIDATE_GPU}" == "true" ]]; then
     phase validate_gpu_lightweight validate_gpu_lightweight
   fi

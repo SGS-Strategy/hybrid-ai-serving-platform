@@ -28,6 +28,9 @@ packages:
   - multipath-tools
   - net-tools
   - nfs-common
+%{ if node_role == "control-plane" ~}
+  - nfs-kernel-server
+%{ endif ~}
   - nftables
   - numactl
   - nvme-cli
@@ -834,4 +837,10 @@ write_files:
       WantedBy=multi-user.target
 
 runcmd:
+  - |
+    host="$(hostname)"
+    short="$(hostname -s)"
+    if ! grep -Eq "(^|[[:space:]])$${short}([[:space:]]|$)" /etc/hosts; then
+      printf '127.0.1.1 %s %s\n' "$${host}" "$${short}" >>/etc/hosts
+    fi
   - /usr/local/sbin/hybrid-ai-node-bootstrap

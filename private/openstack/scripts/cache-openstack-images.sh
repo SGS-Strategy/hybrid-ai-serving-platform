@@ -358,6 +358,9 @@ role_manifest() {
     printf 'base_image=%s\n' "$base_image"
     printf 'common_packages=%s\n' "${COMMON_PACKAGES[*]}"
     case "$role" in
+      control-plane)
+        printf 'control_plane_packages=nfs-kernel-server\n'
+        ;;
       gitlab)
         printf 'gitlab_image=%s\n' "$HA_OPENSTACK_IMAGE_CACHE_GITLAB_IMAGE"
         printf 'gitlab_packages=ca-certificates curl docker.io openssh-server python3 tzdata\n'
@@ -715,6 +718,10 @@ apt_get update
 apt_get install -y "${common_packages[@]}"
 
 case "$role" in
+  control-plane)
+    apt_get install -y nfs-kernel-server
+    systemctl enable nfs-server >/dev/null 2>&1 || systemctl enable nfs-kernel-server >/dev/null 2>&1 || true
+    ;;
   gitlab)
     apt_get install -y ca-certificates curl docker.io openssh-server python3 tzdata
     systemctl enable --now docker
