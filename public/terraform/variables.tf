@@ -162,7 +162,7 @@ variable "msk_broker_instance_type" {
 variable "msk_number_of_broker_nodes" {
   description = "Number of broker nodes for the MSK cluster"
   type        = number
-  default     = 1 # ★ 원래 값: 3 (나중에 복구) ★
+  default     = 2 # 임시 비용 절감 (서브넷 2개 최소 요구사항 맞춤), 원래 값: 3 (나중에 복구)
 }
 
 variable "msk_ebs_volume_size" {
