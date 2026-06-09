@@ -68,6 +68,14 @@ HA_OPENSTACK_LOGIN_USER_DOMAIN_NAME="${HA_OPENSTACK_LOGIN_USER_DOMAIN_NAME:-${OS
 HA_OPENSTACK_LOGIN_PROJECT_DOMAIN_NAME="${HA_OPENSTACK_LOGIN_PROJECT_DOMAIN_NAME:-${OS_PROJECT_DOMAIN_NAME}}"
 HA_OPENSTACK_LOGIN_PASSWORD="${HA_OPENSTACK_LOGIN_PASSWORD:-${OS_PASSWORD}}"
 HA_OPENSTACK_LOGIN_PASSWORD_INPUT_PROVIDED="${HA_OPENSTACK_LOGIN_PASSWORD_INPUT_PROVIDED:-${OS_PASSWORD_INPUT_PROVIDED}}"
+TF_VAR_BUILD_WORKER_COUNT_INPUT_PROVIDED=false
+TF_VAR_GPU_WORKER_COUNT_INPUT_PROVIDED=false
+TF_VAR_GITLAB_COUNT_INPUT_PROVIDED=false
+TF_VAR_HARBOR_COUNT_INPUT_PROVIDED=false
+[[ -n "${TF_VAR_build_worker_count+x}" ]] && TF_VAR_BUILD_WORKER_COUNT_INPUT_PROVIDED=true
+[[ -n "${TF_VAR_gpu_worker_count+x}" ]] && TF_VAR_GPU_WORKER_COUNT_INPUT_PROVIDED=true
+[[ -n "${TF_VAR_gitlab_count+x}" ]] && TF_VAR_GITLAB_COUNT_INPUT_PROVIDED=true
+[[ -n "${TF_VAR_harbor_count+x}" ]] && TF_VAR_HARBOR_COUNT_INPUT_PROVIDED=true
 TF_VAR_control_plane_image_name="${TF_VAR_control_plane_image_name:-ubuntu-22.04}"
 TF_VAR_build_worker_image_name="${TF_VAR_build_worker_image_name:-ubuntu-22.04}"
 TF_VAR_gpu_worker_image_name="${TF_VAR_gpu_worker_image_name:-ubuntu-22.04}"
@@ -728,25 +736,13 @@ terraform_apply_prefix() {
     "${ROOT}/private/openstack/zz-local-devstack.auto.tfvars"
 }
 
-actions_lightweight_stack() {
-  local prefix
-
-  prefix="$(terraform_apply_prefix)"
-  [[ "$prefix" == *-actions ]]
-}
-
 optional_apply_phase_enabled() {
   local setting="$1"
 
   case "$setting" in
     true) return 0 ;;
     false) return 1 ;;
-    auto)
-      if actions_lightweight_stack; then
-        return 1
-      fi
-      return 0
-      ;;
+    auto) return 0 ;;
     *)
       printf 'optional apply phase setting must be true, false, or auto; got: %s\n' "$setting" >&2
       return 2
@@ -784,13 +780,28 @@ PY
 effective_worker_count() {
   local name="$1"
   local default_value="$2"
-  local prefix="$3"
+  local _prefix="$3"
+  local provided_var_name
+  local env_var_name
+  local value
 
-  if [[ -n "${PRIVATE_CLOUD_TFVARS:-}" && "$prefix" == *-actions ]]; then
-    if ! terraform_tfvars_has_var "$name" private-cloud.auto.tfvars; then
-      printf '0\n'
-      return 0
+  case "$name" in
+    build_worker_count) provided_var_name="TF_VAR_BUILD_WORKER_COUNT_INPUT_PROVIDED" ;;
+    gpu_worker_count) provided_var_name="TF_VAR_GPU_WORKER_COUNT_INPUT_PROVIDED" ;;
+    gitlab_count) provided_var_name="TF_VAR_GITLAB_COUNT_INPUT_PROVIDED" ;;
+    harbor_count) provided_var_name="TF_VAR_HARBOR_COUNT_INPUT_PROVIDED" ;;
+    *) provided_var_name="" ;;
+  esac
+
+  if [[ -n "$provided_var_name" && "${!provided_var_name}" == "true" ]]; then
+    env_var_name="TF_VAR_${name}"
+    value="${!env_var_name}"
+    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+      printf 'Terraform variable %s must be a non-negative integer, got: %s\n' "$name" "$value" >&2
+      return 1
     fi
+    printf '%s\n' "$value"
+    return 0
   fi
 
   terraform_var_value "$name" "$default_value" private-cloud.auto.tfvars
