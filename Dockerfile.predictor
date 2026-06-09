@@ -1,0 +1,32 @@
+FROM pytorch/torchserve:0.9.0-cpu
+
+USER root
+RUN pip install scikit-learn joblib numpy && \
+    /home/venv/bin/pip install scikit-learn joblib numpy
+
+WORKDIR /home/model-server
+
+COPY handler.py /home/model-server/handler.py
+COPY model.pt /home/model-server/model-store/model.pt
+COPY scaler.pkl /home/model-server/model-store/scaler.pkl
+
+RUN torch-model-archiver \
+    --model-name kamp-dnn \
+    --version 1.0 \
+    --serialized-file /home/model-server/model-store/model.pt \
+    --handler /home/model-server/handler.py \
+    --extra-files /home/model-server/model-store/scaler.pkl \
+    --export-path /home/model-server/model-store
+
+ENV TS_GRPC_PORT=7070
+ENV TS_HTTP_PORT=8080
+ENV TS_MANAGEMENT_PORT=8081
+
+EXPOSE 8080 8081 7070
+
+CMD ["torchserve", \
+     "--start", \
+     "--ncs", \
+     "--model-store", "/home/model-server/model-store", \
+     "--models", "kamp-dnn=kamp-dnn.mar", \
+     "--ts-config", "/home/model-server/config.properties"]
