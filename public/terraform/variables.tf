@@ -106,36 +106,36 @@ variable "eks_node_groups" {
   }))
   default = {
     inference = {
-      instance_types = ["m7i-flex.large"] # ["c6i.xlarge"]
+      instance_types = ["t3.small"]
       az_count       = 3
-      desired_size   = 1 # original: 2
+      desired_size   = 1 # ★ 원래 값 : 2 (나중에 복구) ★
       min_size       = 1
       max_size       = 10
       labels         = { workload = "inference" }
       taints         = []
     }
     app = {
-      instance_types = ["m7i-flex.large"] # ["t3.medium"]
+      instance_types = ["t3.small"]
       az_count       = 3
-      desired_size   = 1 # original: 2
-      min_size       = 1
+      desired_size   = 0 # ★ 임시로 0 , 원래 값 : 1 (나중에 복구) ★
+      min_size       = 0 # ★ 임시로 0 , 원래 값 : 1 (나중에 복구) ★
       max_size       = 10
       labels         = { workload = "app" }
       taints         = []
     }
     system = {
-      instance_types = ["m7i-flex.large"] # ["t3.medium"]
+      instance_types = ["t3.small"]
       az_count       = 2
-      desired_size   = 1 # original: 2
-      min_size       = 1 # original: 2
+      desired_size   = 1 # ★ 원래 값 : 2 (나중에 복구) ★
+      min_size       = 1 # ★ 원래 값 : 2 (나중에 복구) ★
       max_size       = 3
       labels         = { workload = "system" }
       taints         = []
     }
     monitoring = {
-      instance_types = ["m7i-flex.large"] # ["t3.large"]
-      az_count       = 2
-      desired_size   = 1 # original: 1
+      instance_types = ["t3.medium"]
+      az_count       = 1 # ★ 원래 값: 2 (나중에 복구) ★
+      desired_size   = 1
       min_size       = 1
       max_size       = 2
       labels         = { workload = "monitoring" }
@@ -162,13 +162,13 @@ variable "msk_broker_instance_type" {
 variable "msk_number_of_broker_nodes" {
   description = "Number of broker nodes for the MSK cluster"
   type        = number
-  default     = 3
+  default     = 1 # ★ 원래 값: 3 (나중에 복구) ★
 }
 
 variable "msk_ebs_volume_size" {
   description = "Broker EBS volume size in GiB for the MSK cluster"
   type        = number
-  default     = 1000
+  default     = 100 # ★ 원래 값: 1000 GiB (나중에 복구) ★
 }
 
 variable "manage_msk_topics" {
@@ -180,14 +180,14 @@ variable "manage_msk_topics" {
 variable "msk_topic_replication_factor" {
   description = "Replication factor to use when creating MSK topics"
   type        = number
-  default     = 3
+  default     = 1 # ★ 원래 값: 3 (나중에 복구) ★
 }
 
 variable "msk_topic_configs" {
   description = "Topic-level MSK configuration properties to apply when creating or updating topics"
   type        = map(string)
   default = {
-    "min.insync.replicas" = "2"
+    "min.insync.replicas" = "1" # ★ 원래 값: 2 (나중에 복구) ★
   }
 }
 

@@ -37,7 +37,7 @@ resource "aws_security_group" "vpce" {
   })
 }
 
-# S3 게이트웨이 엔드포인트 (VPC 내부 트래픽용)
+# S3 게이트웨이 엔드포인트 (무료, VPC 내부 트래픽용)
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.main.id
   service_name      = "com.amazonaws.${var.aws_region}.s3"
@@ -49,31 +49,31 @@ resource "aws_vpc_endpoint" "s3" {
   })
 }
 
-# S3 인터페이스 엔드포인트 (VPN 통한 온프레미스 → S3 트래픽용)
-# - 내부 VPC 트래픽은 게이트웨이 엔드포인트로, 온프레미스만 인터페이스 엔드포인트로 분리하기 위해
-#   private_dns_only_for_inbound_resolver_endpoint = true 설정
-# - AWS 제약: PrivateDnsOnlyForInboundResolverEndpoint=true 사용 시 S3 게이트웨이 엔드포인트가
-#   먼저 존재해야 하므로 명시적으로 depends_on 지정
-resource "aws_vpc_endpoint" "s3_interface" {
-  vpc_id              = aws_vpc.main.id
-  service_name        = "com.amazonaws.${var.aws_region}.s3"
-  vpc_endpoint_type   = "Interface"
-  private_dns_enabled = true
-  security_group_ids  = [aws_security_group.vpce.id]
-  subnet_ids          = aws_subnet.eks_private[*].id
+# ★ S3 인터페이스 엔드포인트 - 비활성화 (비용 절감) ★
+# - 온프레미스 Private Cloud → S3 직접 접근 시 필요 (VPN 연결 후 활성화)
+# - 활성화 시 subnet_ids = aws_subnet.eks_private[*].id (3 AZ) 로 변경
+# - dns_options.private_dns_only_for_inbound_resolver_endpoint = true 도 함께 복구
+#
+# resource "aws_vpc_endpoint" "s3_interface" {
+#   vpc_id              = aws_vpc.main.id
+#   service_name        = "com.amazonaws.${var.aws_region}.s3"
+#   vpc_endpoint_type   = "Interface"
+#   private_dns_enabled = true
+#   security_group_ids  = [aws_security_group.vpce.id]
+#   subnet_ids          = aws_subnet.eks_private[*].id
+#
+#   dns_options {
+#     private_dns_only_for_inbound_resolver_endpoint = true
+#   }
+#
+#   depends_on = [aws_vpc_endpoint.s3]
+#
+#   tags = merge(local.common_tags, {
+#     Name = "${var.project_name}-s3-if-endpoint"
+#   })
+# }
 
-  dns_options {
-    private_dns_only_for_inbound_resolver_endpoint = true
-  }
-
-  depends_on = [aws_vpc_endpoint.s3]
-
-  tags = merge(local.common_tags, {
-    Name = "${var.project_name}-s3-if-endpoint"
-  })
-}
-
-# DynamoDB 게이트웨이 엔드포인트
+# DynamoDB 게이트웨이 엔드포인트 (무료)
 resource "aws_vpc_endpoint" "dynamodb" {
   vpc_id            = aws_vpc.main.id
   service_name      = "com.amazonaws.${var.aws_region}.dynamodb"
@@ -86,13 +86,14 @@ resource "aws_vpc_endpoint" "dynamodb" {
 }
 
 # ECR API 인터페이스 엔드포인트
+# ★ subnet_ids: 비용 절감을 위해 1 AZ만 사용 (원래 값: aws_subnet.eks_private[*].id, 3 AZ) ★
 resource "aws_vpc_endpoint" "ecr_api" {
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.aws_region}.ecr.api"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
   security_group_ids  = [aws_security_group.vpce.id]
-  subnet_ids          = aws_subnet.eks_private[*].id
+  subnet_ids          = [aws_subnet.eks_private[0].id] # prod: aws_subnet.eks_private[*].id (3 AZ)
 
   tags = merge(local.common_tags, {
     Name = "${var.project_name}-ecr-api-endpoint"
@@ -100,27 +101,29 @@ resource "aws_vpc_endpoint" "ecr_api" {
 }
 
 # ECR DKR 인터페이스 엔드포인트
+# ★ subnet_ids: 비용 절감을 위해 1 AZ만 사용 (원래 값: aws_subnet.eks_private[*].id, 3 AZ) ★
 resource "aws_vpc_endpoint" "ecr_dkr" {
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.aws_region}.ecr.dkr"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
   security_group_ids  = [aws_security_group.vpce.id]
-  subnet_ids          = aws_subnet.eks_private[*].id
+  subnet_ids          = [aws_subnet.eks_private[0].id] # prod: aws_subnet.eks_private[*].id (3 AZ)
 
   tags = merge(local.common_tags, {
     Name = "${var.project_name}-ecr-dkr-endpoint"
   })
 }
 
-# STS 인터페이스 엔드포인트 (이미지 Push 시 필요)
+# STS 인터페이스 엔드포인트 (IRSA 토큰 검증용)
+# ★ subnet_ids: 비용 절감을 위해 1 AZ만 사용 (원래 값: aws_subnet.eks_private[*].id, 3 AZ) ★
 resource "aws_vpc_endpoint" "sts" {
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.aws_region}.sts"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
   security_group_ids  = [aws_security_group.vpce.id]
-  subnet_ids          = aws_subnet.eks_private[*].id
+  subnet_ids          = [aws_subnet.eks_private[0].id] # prod: aws_subnet.eks_private[*].id (3 AZ)
 
   tags = merge(local.common_tags, {
     Name = "${var.project_name}-sts-endpoint"
@@ -128,13 +131,14 @@ resource "aws_vpc_endpoint" "sts" {
 }
 
 # SSM (Session Manager - bastionless private access)
+# ★ subnet_ids: 비용 절감을 위해 1 AZ만 사용 (원래 값: aws_subnet.eks_private[*].id, 3 AZ) ★
 resource "aws_vpc_endpoint" "ssm" {
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.aws_region}.ssm"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
   security_group_ids  = [aws_security_group.vpce.id]
-  subnet_ids          = aws_subnet.eks_private[*].id
+  subnet_ids          = [aws_subnet.eks_private[0].id] # prod: aws_subnet.eks_private[*].id (3 AZ)
 
   tags = merge(local.common_tags, {
     Name = "${var.project_name}-ssm-endpoint"
@@ -142,13 +146,14 @@ resource "aws_vpc_endpoint" "ssm" {
 }
 
 # SSM Messages
+# ★ subnet_ids: 비용 절감을 위해 1 AZ만 사용 (원래 값: aws_subnet.eks_private[*].id, 3 AZ) ★
 resource "aws_vpc_endpoint" "ssmmessages" {
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.aws_region}.ssmmessages"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
   security_group_ids  = [aws_security_group.vpce.id]
-  subnet_ids          = aws_subnet.eks_private[*].id
+  subnet_ids          = [aws_subnet.eks_private[0].id] # prod: aws_subnet.eks_private[*].id (3 AZ)
 
   tags = merge(local.common_tags, {
     Name = "${var.project_name}-ssmmessages-endpoint"
@@ -156,13 +161,14 @@ resource "aws_vpc_endpoint" "ssmmessages" {
 }
 
 # EC2 Messages
+# ★ subnet_ids: 비용 절감을 위해 1 AZ만 사용 (원래 값: aws_subnet.eks_private[*].id, 3 AZ) ★
 resource "aws_vpc_endpoint" "ec2messages" {
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.aws_region}.ec2messages"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
   security_group_ids  = [aws_security_group.vpce.id]
-  subnet_ids          = aws_subnet.eks_private[*].id
+  subnet_ids          = [aws_subnet.eks_private[0].id] # prod: aws_subnet.eks_private[*].id (3 AZ)
 
   tags = merge(local.common_tags, {
     Name = "${var.project_name}-ec2messages-endpoint"

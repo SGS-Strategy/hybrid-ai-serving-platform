@@ -125,10 +125,11 @@ output "s3_gateway_endpoint_id" {
   value       = aws_vpc_endpoint.s3.id
 }
 
-output "s3_interface_endpoint_id" {
-  description = "S3 interface VPC endpoint ID (used by on-premise traffic over VPN)"
-  value       = aws_vpc_endpoint.s3_interface.id
-}
+# S3 Interface VPCE 비활성화됨 - endpoints.tf 참고
+# output "s3_interface_endpoint_id" {
+#   description = "S3 interface VPC endpoint ID (used by on-premise traffic over VPN)"
+#   value       = aws_vpc_endpoint.s3_interface.id
+# }
 
 # VPN outputs
 output "vpn_gateway_id" {
@@ -147,7 +148,8 @@ output "vpn_connection_ids" {
 }
 
 # Route 53 Resolver outputs
-output "inbound_resolver_ips" {
-  description = "Inbound Route 53 Resolver IPs for forwarding *.amazonaws.com and private hosted zones"
-  value       = [for ip in aws_route53_resolver_endpoint.inbound.ip_address : ip.ip]
-}
+# 비활성화됨 - route53_resolver.tf 참고
+# output "inbound_resolver_ips" {
+#   description = "Inbound Route 53 Resolver IPs for forwarding *.amazonaws.com and private hosted zones"
+#   value       = [for ip in aws_route53_resolver_endpoint.inbound.ip_address : ip.ip]
+# }
