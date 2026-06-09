@@ -166,6 +166,7 @@ HA_PRIVATE_CLOUD_SETUP_REGISTRY="${HA_PRIVATE_CLOUD_SETUP_REGISTRY:-auto}"
 HA_PRIVATE_CLOUD_SETUP_MODEL_BUILD="${HA_PRIVATE_CLOUD_SETUP_MODEL_BUILD:-auto}"
 HA_PRIVATE_CLOUD_SYNC_OPENSTACK_USER="${HA_PRIVATE_CLOUD_SYNC_OPENSTACK_USER:-auto}"
 HA_TERRAFORM_APPLY_PARALLELISM="${HA_TERRAFORM_APPLY_PARALLELISM:-2}"
+HA_ALLOW_UNMANAGED_OPENSTACK_STACK="${HA_ALLOW_UNMANAGED_OPENSTACK_STACK:-false}"
 
 printf 'phase\tseconds\tstatus\n' >"${TIMINGS}"
 
@@ -767,6 +768,36 @@ terraform_apply_prefix() {
     hybrid-ai-private \
     "${ROOT}/private/openstack/private-cloud.auto.tfvars" \
     "${ROOT}/private/openstack/zz-local-devstack.auto.tfvars"
+}
+
+guard_unmanaged_openstack_stack() {
+  local prefix="$1"
+  local managed_compute
+  local existing_servers
+
+  [[ "${HA_ALLOW_UNMANAGED_OPENSTACK_STACK}" != "true" ]] || return 0
+  managed_compute="$(terraform state list 2>/dev/null | grep -Ec '^openstack_compute_instance_v2\.')"
+  [[ "$managed_compute" -eq 0 ]] || return 0
+
+  existing_servers="$(lxc exec ha-openstack -- sudo -u stack -H bash -lc '
+    set -euo pipefail
+    prefix="$1"
+    cd /opt/stack/devstack
+    set +u
+    source openrc admin admin >/dev/null
+    set -u
+    openstack server list --all-projects -f value -c ID -c Name -c Status \
+      | awk -v wanted="${prefix}-" "$2 ~ \"^\" wanted { print }"
+  ' _ "$prefix")"
+
+  if [[ -n "$existing_servers" ]]; then
+    {
+      printf 'Terraform state has no managed compute instances, but OpenStack already has servers for project_name=%s:\n' "$prefix"
+      printf '%s\n' "$existing_servers"
+      printf 'Refusing to apply because this would create duplicate VMs. Run destroy/import with the matching backend state first.\n'
+    } >&2
+    return 1
+  fi
 }
 
 optional_apply_phase_enabled() {
@@ -1544,6 +1575,7 @@ terraform_apply() {
       [[ -n "${address}" ]] && terraform state rm "${address}"
     done <<<"${legacy_addresses}"
   fi
+  guard_unmanaged_openstack_stack "$apply_prefix"
   key_pair_name="$(terraform_var_value key_pair_name hybrid-ai-private-admin private-cloud.auto.tfvars zz-local-devstack.auto.tfvars)"
   if ! terraform state show -no-color openstack_compute_keypair_v2.admin >/dev/null 2>&1; then
     terraform import openstack_compute_keypair_v2.admin "${key_pair_name}" >/dev/null 2>&1 || true
