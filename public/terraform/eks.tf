@@ -67,12 +67,17 @@ resource "aws_launch_template" "node_groups" {
     })
   }
 
-  block_device_mappings {
-    device_name = "/dev/xvda"
-    ebs {
-      volume_size           = 30 # 기본값 20GB에서 증가, /tmp Terraform/Kafka 바이너리 공간 확보용
-      volume_type           = "gp3"
-      delete_on_termination = true
+  # system 노드만 30GB: SSM을 통해 Terraform/Kafka 바이너리를 /tmp에 내려받아 실행하므로 디스크 여유 필요
+  # 나머지 노드는 기본값(20GB) 사용
+  dynamic "block_device_mappings" {
+    for_each = each.key == "system" ? [1] : []
+    content {
+      device_name = "/dev/xvda"
+      ebs {
+        volume_size           = 30
+        volume_type           = "gp3"
+        delete_on_termination = true
+      }
     }
   }
 }
