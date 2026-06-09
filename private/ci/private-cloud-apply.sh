@@ -776,7 +776,8 @@ guard_unmanaged_openstack_stack() {
   local existing_servers
 
   [[ "${HA_ALLOW_UNMANAGED_OPENSTACK_STACK}" != "true" ]] || return 0
-  managed_compute="$(terraform state list 2>/dev/null | grep -Ec '^openstack_compute_instance_v2\.')"
+  managed_compute="$(terraform state list 2>/dev/null | grep -Ec '^openstack_compute_instance_v2\.' || true)"
+  managed_compute="${managed_compute:-0}"
   [[ "$managed_compute" -eq 0 ]] || return 0
 
   existing_servers="$(lxc exec ha-openstack -- sudo -u stack -H bash -lc '
