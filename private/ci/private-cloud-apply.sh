@@ -265,6 +265,22 @@ wait_lxc_ip() {
   return 1
 }
 
+ensure_devstack_container_running() {
+  local status
+
+  if ! lxc info ha-openstack >/dev/null 2>&1; then
+    printf 'DevStack container ha-openstack is missing; rerun with run_mode=reinstall.\n' >&2
+    return 1
+  fi
+
+  status="$(lxc list ha-openstack -c s --format csv | tr -d '"')"
+  if [[ "$status" != "RUNNING" ]]; then
+    log "starting DevStack container ha-openstack (current status: ${status:-unknown})"
+    lxc start ha-openstack
+    wait_lxc_ip
+  fi
+}
+
 desired_lxc_raw_config() {
   printf '%s\n' \
     'lxc.apparmor.profile=unconfined' \
@@ -1361,6 +1377,7 @@ devstack_reinstall() {
 
 devstack_apply_check() {
   local product_id
+  ensure_devstack_container_running
   verify_devstack
   sync_openstack_login_user
   configure_lxc_devices
