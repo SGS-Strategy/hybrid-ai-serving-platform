@@ -114,6 +114,7 @@ jobs:
           write_env HA_PRIVATE_CLOUD_RUN_MODE "${{ inputs.run_mode }}"
           write_env HA_PRIVATE_CLOUD_VALIDATE_GPU "${{ inputs.validate_gpu && 'true' || 'false' }}"
           write_env HA_PRIVATE_CLOUD_CLEANUP_DEVSTACK "${{ inputs.cleanup_devstack && 'true' || 'false' }}"
+          write_env HA_PRIVATE_CLOUD_SYNC_OPENSTACK_USER "true"
           write_env TF_IN_AUTOMATION "true"
           write_env TF_INPUT "false"
 

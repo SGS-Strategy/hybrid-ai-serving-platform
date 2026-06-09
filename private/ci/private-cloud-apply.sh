@@ -54,12 +54,20 @@ export TF_INPUT="${TF_INPUT:-false}"
 
 HA_DEVSTACK_PASSWORD="${HA_DEVSTACK_PASSWORD:-hybrid-ai-devstack}"
 PRIVATE_CLOUD_BASE_DOMAIN="${PRIVATE_CLOUD_BASE_DOMAIN:-intp.me}"
+OS_PASSWORD_INPUT_PROVIDED=false
+[[ -n "${OS_PASSWORD+x}" ]] && OS_PASSWORD_INPUT_PROVIDED=true
 OS_USERNAME="${OS_USERNAME:-admin}"
 OS_PROJECT_NAME="${OS_PROJECT_NAME:-admin}"
 OS_USER_DOMAIN_NAME="${OS_USER_DOMAIN_NAME:-Default}"
 OS_PROJECT_DOMAIN_NAME="${OS_PROJECT_DOMAIN_NAME:-Default}"
 OS_REGION_NAME="${OS_REGION_NAME:-RegionOne}"
 OS_PASSWORD="${OS_PASSWORD:-${HA_DEVSTACK_PASSWORD}}"
+HA_OPENSTACK_LOGIN_USERNAME="${HA_OPENSTACK_LOGIN_USERNAME:-${OS_USERNAME}}"
+HA_OPENSTACK_LOGIN_PROJECT_NAME="${HA_OPENSTACK_LOGIN_PROJECT_NAME:-${OS_PROJECT_NAME}}"
+HA_OPENSTACK_LOGIN_USER_DOMAIN_NAME="${HA_OPENSTACK_LOGIN_USER_DOMAIN_NAME:-${OS_USER_DOMAIN_NAME}}"
+HA_OPENSTACK_LOGIN_PROJECT_DOMAIN_NAME="${HA_OPENSTACK_LOGIN_PROJECT_DOMAIN_NAME:-${OS_PROJECT_DOMAIN_NAME}}"
+HA_OPENSTACK_LOGIN_PASSWORD="${HA_OPENSTACK_LOGIN_PASSWORD:-${OS_PASSWORD}}"
+HA_OPENSTACK_LOGIN_PASSWORD_INPUT_PROVIDED="${HA_OPENSTACK_LOGIN_PASSWORD_INPUT_PROVIDED:-${OS_PASSWORD_INPUT_PROVIDED}}"
 TF_VAR_control_plane_image_name="${TF_VAR_control_plane_image_name:-ubuntu-22.04}"
 TF_VAR_build_worker_image_name="${TF_VAR_build_worker_image_name:-ubuntu-22.04}"
 TF_VAR_gpu_worker_image_name="${TF_VAR_gpu_worker_image_name:-ubuntu-22.04}"
@@ -140,6 +148,7 @@ HA_PRIVATE_CLOUD_QUOTA_HEADROOM_RAM_MB="${HA_PRIVATE_CLOUD_QUOTA_HEADROOM_RAM_MB
 HA_PRIVATE_CLOUD_SETUP_STORAGE="${HA_PRIVATE_CLOUD_SETUP_STORAGE:-auto}"
 HA_PRIVATE_CLOUD_SETUP_REGISTRY="${HA_PRIVATE_CLOUD_SETUP_REGISTRY:-auto}"
 HA_PRIVATE_CLOUD_SETUP_MODEL_BUILD="${HA_PRIVATE_CLOUD_SETUP_MODEL_BUILD:-auto}"
+HA_PRIVATE_CLOUD_SYNC_OPENSTACK_USER="${HA_PRIVATE_CLOUD_SYNC_OPENSTACK_USER:-auto}"
 
 printf 'phase\tseconds\tstatus\n' >"${TIMINGS}"
 
@@ -1046,7 +1055,11 @@ PREFLIGHT_OPENSTACK_QUOTA
 
 ensure_openstack_user() {
   lxc exec ha-openstack -- sudo -u stack -H bash -s -- \
-    "${OS_USERNAME}" "${OS_PROJECT_NAME}" "${OS_PASSWORD}" "${OS_USER_DOMAIN_NAME}" "${OS_PROJECT_DOMAIN_NAME}" <<'ENSURE_OPENSTACK_USER'
+    "${HA_OPENSTACK_LOGIN_USERNAME}" \
+    "${HA_OPENSTACK_LOGIN_PROJECT_NAME}" \
+    "${HA_OPENSTACK_LOGIN_PASSWORD}" \
+    "${HA_OPENSTACK_LOGIN_USER_DOMAIN_NAME}" \
+    "${HA_OPENSTACK_LOGIN_PROJECT_DOMAIN_NAME}" <<'ENSURE_OPENSTACK_USER'
 set -eo pipefail
 target_username="$1"
 target_project="$2"
@@ -1068,6 +1081,61 @@ if [[ "$target_username" != "admin" ]]; then
   openstack role add --project "$target_project" --project-domain "$target_project_domain" --user "$target_username" --user-domain "$target_user_domain" member
 fi
 ENSURE_OPENSTACK_USER
+}
+
+openstack_user_sync_enabled() {
+  case "${HA_PRIVATE_CLOUD_SYNC_OPENSTACK_USER}" in
+    true)
+      return 0
+      ;;
+    false)
+      return 1
+      ;;
+    auto)
+      if [[ -n "${GITHUB_RUN_ID:-}" || -n "${HA_CI_COMMAND:-}" ]]; then
+        return 0
+      fi
+      if [[ "${HA_OPENSTACK_LOGIN_USERNAME}" != "admin" || "${HA_OPENSTACK_LOGIN_PROJECT_NAME}" != "admin" ]]; then
+        return 0
+      fi
+      return 1
+      ;;
+    *)
+      printf 'HA_PRIVATE_CLOUD_SYNC_OPENSTACK_USER must be true, false, or auto; got: %s\n' "${HA_PRIVATE_CLOUD_SYNC_OPENSTACK_USER}" >&2
+      return 2
+      ;;
+  esac
+}
+
+verify_openstack_login_user() {
+  local auth_url
+
+  auth_url="${HA_DEVSTACK_AUTH_URL:-http://127.0.0.1:18081/identity/v3}"
+  OS_AUTH_URL="${auth_url}" \
+  OS_USERNAME="${HA_OPENSTACK_LOGIN_USERNAME}" \
+  OS_PASSWORD="${HA_OPENSTACK_LOGIN_PASSWORD}" \
+  OS_PROJECT_NAME="${HA_OPENSTACK_LOGIN_PROJECT_NAME}" \
+  OS_USER_DOMAIN_NAME="${HA_OPENSTACK_LOGIN_USER_DOMAIN_NAME}" \
+  OS_PROJECT_DOMAIN_NAME="${HA_OPENSTACK_LOGIN_PROJECT_DOMAIN_NAME}" \
+  OS_REGION_NAME="${OS_REGION_NAME}" \
+  OS_IDENTITY_API_VERSION="${OS_IDENTITY_API_VERSION:-3}" \
+    check_openstack_auth
+}
+
+sync_openstack_login_user() {
+  if ! openstack_user_sync_enabled; then
+    log "SKIP OpenStack login user sync"
+    return 0
+  fi
+
+  [[ -n "${HA_OPENSTACK_LOGIN_PASSWORD}" ]] || {
+    printf 'OpenStack login user sync requires HA_OPENSTACK_LOGIN_PASSWORD or OS_PASSWORD\n' >&2
+    return 1
+  }
+
+  log "syncing OpenStack login user ${HA_OPENSTACK_LOGIN_USERNAME}/${HA_OPENSTACK_LOGIN_PROJECT_NAME}"
+  ensure_openstack_user
+  verify_openstack_login_user
 }
 
 ensure_devstack_egress() {
@@ -1164,7 +1232,7 @@ devstack_reinstall() {
   ensure_flavors
   configure_gpu_passthrough
   ensure_images
-  ensure_openstack_user
+  sync_openstack_login_user
   ensure_devstack_egress
   ensure_horizon_proxy
   configure_horizon_proxy_settings
@@ -1173,6 +1241,7 @@ devstack_reinstall() {
 
 devstack_apply_check() {
   verify_devstack
+  sync_openstack_login_user
   configure_lxc_devices
   configure_vfio_guest_access
   ensure_devstack_egress
@@ -1196,6 +1265,13 @@ use_local_devstack_openstack_env() {
   openrc_password="$(devstack_openrc_password)"
   if [[ -n "$openrc_password" ]]; then
     devstack_password="$openrc_password"
+  fi
+  if [[ "${HA_OPENSTACK_LOGIN_USERNAME}" == "${HA_DEVSTACK_USERNAME:-admin}" \
+    && "${HA_OPENSTACK_LOGIN_PROJECT_NAME}" == "${HA_DEVSTACK_PROJECT_NAME:-admin}" \
+    && "${HA_OPENSTACK_LOGIN_USER_DOMAIN_NAME}" == "${HA_DEVSTACK_USER_DOMAIN_NAME:-Default}" \
+    && "${HA_OPENSTACK_LOGIN_PROJECT_DOMAIN_NAME}" == "${HA_DEVSTACK_PROJECT_DOMAIN_NAME:-Default}" \
+    && "${HA_OPENSTACK_LOGIN_PASSWORD_INPUT_PROVIDED}" == "true" ]]; then
+    devstack_password="${HA_OPENSTACK_LOGIN_PASSWORD}"
   fi
   export OS_PASSWORD="$devstack_password"
   export OS_PROJECT_NAME="${HA_DEVSTACK_PROJECT_NAME:-admin}"
