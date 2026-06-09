@@ -788,7 +788,12 @@ guard_unmanaged_openstack_stack() {
     source openrc admin admin >/dev/null
     set -u
     openstack server list --all-projects -f value -c ID -c Name -c Status \
-      | awk -v wanted="${prefix}-" "$2 ~ \"^\" wanted { print }"
+      | while read -r id name status; do
+          [[ -n "${id:-}" && -n "${name:-}" ]] || continue
+          if [[ "$name" == "${prefix}-"* ]]; then
+            printf "%s %s %s\n" "$id" "$name" "${status:-}"
+          fi
+        done
   ' _ "$prefix")"
 
   if [[ -n "$existing_servers" ]]; then
