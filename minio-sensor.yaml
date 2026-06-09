@@ -1,0 +1,115 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata:
+  name: minio-sensor
+  namespace: argo-events
+spec:
+  template:
+    serviceAccountName: argo-events-sa
+  dependencies:
+    - name: minio-dep
+      eventSourceName: minio-event-source
+      eventName: raw-data-upload
+  triggers:
+    - template:
+        name: model-build-trigger
+        argoWorkflow:
+          group: argoproj.io
+          version: v1alpha1
+          resource: workflows
+          operation: submit
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1
+              kind: Workflow
+              metadata:
+                generateName: model-build-job-
+                namespace: default
+              spec:
+                entrypoint: pipeline
+                imagePullSecrets:
+                - name: harbor-secret
+                volumeClaimTemplates:
+                - metadata:
+                    name: workspace
+                  spec:
+                    accessModes: ["ReadWriteOnce"]
+                    resources:
+                      requests:
+                        storage: 1Gi
+                volumes:
+                - name: harbor-creds
+                  secret:
+                    secretName: harbor-docker-secret
+                    items:
+                    - key: .dockerconfigjson
+                      path: config.json
+                templates:
+                - name: pipeline
+                  steps:
+                  - - name: model-build-job
+                      template: model-build
+                  - - name: model-package-job
+                      template: model-package
+                - name: model-build
+                  container:
+                    image: 192.168.49.2:30002/kamp/model-build-image:v1
+                    command: ["python", "model_build.py"]
+                    env:
+                    - name: MINIO_ENDPOINT
+                      value: "minio.minio.svc.cluster.local:9000"
+                    - name: MINIO_ACCESS_KEY
+                      value: "minioadmin"
+                    - name: MINIO_SECRET_KEY
+                      value: "minioadmin123"
+                    resources:
+                      requests:
+                        memory: "2Gi"
+                        cpu: "1"
+                      limits:
+                        memory: "4Gi"
+                        cpu: "2"
+                - name: model-package
+                  steps:
+                  - - name: prepare
+                      template: prepare-files
+                  - - name: build
+                      template: kaniko-build
+                - name: prepare-files
+                  container:
+                    image: python:3.9-slim
+                    command: ["sh", "-c"]
+                    args:
+                    - |
+                      apt-get update -q && apt-get install -y git -q
+                      pip install minio -q
+                      cd /workspace
+                      git clone -b feature/model https://github.com/SGS-Strategy/hybrid-ai-serving-platform.git .
+                      python3 -c "
+                      from minio import Minio
+                      client = Minio('minio.minio.svc.cluster.local:9000',
+                                     access_key='minioadmin',
+                                     secret_key='minioadmin123',
+                                     secure=False)
+                      client.fget_object('kamp-models', 'artifacts/model.pt', '/workspace/model.pt')
+                      client.fget_object('kamp-models', 'artifacts/scaler.pkl', '/workspace/scaler.pkl')
+                      print('파일 준비 완료!')
+                      "
+                    volumeMounts:
+                    - name: workspace
+                      mountPath: /workspace
+                - name: kaniko-build
+                  container:
+                    image: 192.168.49.2:30002/kamp/kaniko-executor:latest
+                    command: ["/kaniko/executor"]
+                    args:
+                    - --dockerfile=Dockerfile.predictor
+                    - --context=/workspace
+                    - --destination=192.168.49.2:30002/kamp/predictor-image:v1
+                    - --insecure
+                    - --skip-tls-verify
+                    volumeMounts:
+                    - name: workspace
+                      mountPath: /workspace
+                    - name: harbor-creds
+                      mountPath: /kaniko/.docker

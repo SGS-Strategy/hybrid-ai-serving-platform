@@ -50,69 +50,24 @@ t_max = min(
     sensor4["time"].max()
 )
 
-# 마지막 값이 범위를 넘어가는 문제 방지
 x_new = np.arange(t_min, t_max - 0.01, 0.001)
 
 y_new1, y_new2, y_new3, y_new4 = [], [], [], []
 
 for item in ["normal", "type1", "type2", "type3"]:
-
-    f1 = interpolate.interp1d(
-        sensor1["time"],
-        sensor1[item],
-        kind="linear",
-        bounds_error=False,
-        fill_value="extrapolate"
-    )
-
-    f2 = interpolate.interp1d(
-        sensor2["time"],
-        sensor2[item],
-        kind="linear",
-        bounds_error=False,
-        fill_value="extrapolate"
-    )
-
-    f3 = interpolate.interp1d(
-        sensor3["time"],
-        sensor3[item],
-        kind="linear",
-        bounds_error=False,
-        fill_value="extrapolate"
-    )
-
-    f4 = interpolate.interp1d(
-        sensor4["time"],
-        sensor4[item],
-        kind="linear",
-        bounds_error=False,
-        fill_value="extrapolate"
-    )
-
+    f1 = interpolate.interp1d(sensor1["time"], sensor1[item], kind="linear", bounds_error=False, fill_value="extrapolate")
+    f2 = interpolate.interp1d(sensor2["time"], sensor2[item], kind="linear", bounds_error=False, fill_value="extrapolate")
+    f3 = interpolate.interp1d(sensor3["time"], sensor3[item], kind="linear", bounds_error=False, fill_value="extrapolate")
+    f4 = interpolate.interp1d(sensor4["time"], sensor4[item], kind="linear", bounds_error=False, fill_value="extrapolate")
     y_new1.append(f1(x_new))
     y_new2.append(f2(x_new))
     y_new3.append(f3(x_new))
     y_new4.append(f4(x_new))
 
-sensor1 = pd.DataFrame(
-    np.array(y_new1).T,
-    columns=["normal", "type1", "type2", "type3"]
-)
-
-sensor2 = pd.DataFrame(
-    np.array(y_new2).T,
-    columns=["normal", "type1", "type2", "type3"]
-)
-
-sensor3 = pd.DataFrame(
-    np.array(y_new3).T,
-    columns=["normal", "type1", "type2", "type3"]
-)
-
-sensor4 = pd.DataFrame(
-    np.array(y_new4).T,
-    columns=["normal", "type1", "type2", "type3"]
-)
+sensor1 = pd.DataFrame(np.array(y_new1).T, columns=["normal", "type1", "type2", "type3"])
+sensor2 = pd.DataFrame(np.array(y_new2).T, columns=["normal", "type1", "type2", "type3"])
+sensor3 = pd.DataFrame(np.array(y_new3).T, columns=["normal", "type1", "type2", "type3"])
+sensor4 = pd.DataFrame(np.array(y_new4).T, columns=["normal", "type1", "type2", "type3"])
 
 # =========================
 # 3. 센서별 데이터 조정
@@ -243,7 +198,7 @@ def train_model(model, criterion, optimizer, num_epochs, train_dataloader, PATH)
 
         accuracy /= total
         loss_values_v.append(v_loss.item())
-        print(f"[Epoch {epoch}/{num_epochs}] Train Loss: {loss.item():.6f} Valid Loss: {v_loss.item():.6f} Accuracy: {accuracy:.6f}")
+        print(f"[Epoch {epoch+1}/{num_epochs}] Train Loss: {loss.item():.6f} Valid Loss: {v_loss.item():.6f} Accuracy: {accuracy:.6f}")
 
         if accuracy_past > accuracy:
             check += 1
@@ -254,26 +209,26 @@ def train_model(model, criterion, optimizer, num_epochs, train_dataloader, PATH)
         if check > 50:
             print("Early stopping!")
             torch.save(model.state_dict(), PATH + "model.pt")
+            joblib.dump(scaler, "/tmp/scaler.pkl")
+            client.fput_object(BUCKET, "artifacts/model.pt", PATH + "model.pt")
+            client.fput_object(BUCKET, "artifacts/scaler.pkl", "/tmp/scaler.pkl")
+            print("저장 완료!")
             return loss_values, loss_values_v
 
     torch.save(model.state_dict(), PATH + "model.pt")
+    joblib.dump(scaler, "/tmp/scaler.pkl")
+    client.fput_object(BUCKET, "artifacts/model.pt", PATH + "model.pt")
+    client.fput_object(BUCKET, "artifacts/scaler.pkl", "/tmp/scaler.pkl")
+    print("저장 완료!")
     return loss_values, loss_values_v
 
 # =========================
 # 13. 학습 실행
 # =========================
 DNN_model = KAMP_DNN()
+num_epochs = 200
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(DNN_model.parameters())
 PATH = "/tmp/save/DNN/"
 
-DNN_loss_values, DNN_loss_values_v = train_model(DNN_model, criterion, optimizer, 1000, train_dataloader, PATH)
-
-# =========================
-# 14. MinIO에 저장
-# =========================
-print("artifacts MinIO에 저장 중...")
-joblib.dump(scaler, "/tmp/scaler.pkl")
-client.fput_object(BUCKET, "artifacts/model.pt", PATH + "model.pt")
-client.fput_object(BUCKET, "artifacts/scaler.pkl", "/tmp/scaler.pkl")
-print("저장 완료!")
+DNN_loss_values, DNN_loss_values_v = train_model(DNN_model, criterion, optimizer, num_epochs, train_dataloader, PATH)

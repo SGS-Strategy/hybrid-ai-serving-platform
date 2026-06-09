@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: EventSource
+metadata:
+  name: minio-event-source
+  namespace: argo-events
+spec:
+  minio:
+    raw-data-upload:
+      bucket:
+        name: kamp-models
+      endpoint: minio.minio.svc.cluster.local:9000
+      events:
+        - s3:ObjectCreated:Put
+      filter:
+        prefix: "raw-data/"
+      insecure: true
+      accessKey:
+        name: minio-secret
+        key: accessKey
+      secretKey:
+        name: minio-secret
+        key: secretKey
