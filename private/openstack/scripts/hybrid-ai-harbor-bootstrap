@@ -195,6 +195,12 @@ EOF
   cat >/usr/local/sbin/hybrid-ai-harbor-compose <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+# Unset custom HARBOR_* vars so Docker Compose v2 does not substitute them
+# into harbor's generated docker-compose.yml (e.g. HARBOR_ROBOT_NAME=kaniko
+# ending up as a port value via ${VAR} interpolation).
+unset HARBOR_ROBOT_NAME HARBOR_PROJECTS HARBOR_DOMAIN HARBOR_EXTERNAL_URL \
+      HARBOR_VERSION HARBOR_BOOTSTRAP_WAIT_SECONDS HARBOR_ADMIN_PASSWORD_FILE \
+      HARBOR_INSTALLER_URL HARBOR_DATA_VOLUME 2>/dev/null || true
 if docker compose version >/dev/null 2>&1; then
   exec docker compose "$@"
 fi
@@ -247,6 +253,12 @@ write_harbor_config() {
   local external_url="${HARBOR_EXTERNAL_URL:-https://${HARBOR_DOMAIN:-harbor.intp.me}}"
   local http_port="${HARBOR_HTTP_PORT:-80}"
   local data_volume="${HARBOR_DATA_VOLUME:-/data/harbor}"
+
+  if [[ ! "$http_port" =~ ^[0-9]+$ ]]; then
+    save_status failed "HARBOR_HTTP_PORT must be numeric, got: ${http_port}"
+    printf 'HARBOR_HTTP_PORT must be numeric, got: %s\n' "$http_port" >&2
+    return 64
+  fi
 
   admin_password="$(cat "$admin_password_file")"
   database_password="$(cat "$database_password_file")"
@@ -307,6 +319,12 @@ install_harbor() {
   if [[ "$current_checksum" != "$previous_checksum" || ! -f "${install_dir}/docker-compose.yml" ]]; then
     (
       cd "$install_dir"
+      # Unset custom vars to prevent Docker Compose v2 variable substitution
+      # in harbor's generated docker-compose.yml (e.g. HARBOR_ROBOT_NAME=kaniko
+      # being substituted into a ports field, causing "invalid hostPort: kaniko").
+      unset HARBOR_ROBOT_NAME HARBOR_PROJECTS HARBOR_DOMAIN HARBOR_EXTERNAL_URL \
+            HARBOR_VERSION HARBOR_BOOTSTRAP_WAIT_SECONDS HARBOR_ADMIN_PASSWORD_FILE \
+            HARBOR_INSTALLER_URL HARBOR_DATA_VOLUME 2>/dev/null || true
       ./install.sh
     )
     printf '%s\n' "$current_checksum" > "$checksum_file"

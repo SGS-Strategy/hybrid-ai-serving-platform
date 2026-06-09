@@ -14,6 +14,7 @@ HA_OPENSTACK_IMAGE_CACHE_NETWORK="${HA_OPENSTACK_IMAGE_CACHE_NETWORK:-private}"
 HA_OPENSTACK_IMAGE_CACHE_FLOATING_POOL="${HA_OPENSTACK_IMAGE_CACHE_FLOATING_POOL:-public}"
 HA_OPENSTACK_IMAGE_CACHE_KEYPAIR="${HA_OPENSTACK_IMAGE_CACHE_KEYPAIR:-hybrid-ai-image-cache-builder}"
 HA_OPENSTACK_IMAGE_CACHE_SECURITY_GROUP="${HA_OPENSTACK_IMAGE_CACHE_SECURITY_GROUP:-}"
+HA_OPENSTACK_IMAGE_CACHE_SECURITY_GROUP_NAME="${HA_OPENSTACK_IMAGE_CACHE_SECURITY_GROUP_NAME:-hybrid-ai-image-cache-sg}"
 HA_OPENSTACK_IMAGE_CACHE_SSH_USER="${HA_OPENSTACK_IMAGE_CACHE_SSH_USER:-ubuntu}"
 HA_OPENSTACK_IMAGE_CACHE_DNS_SERVERS="${HA_OPENSTACK_IMAGE_CACHE_DNS_SERVERS:-1.1.1.1 8.8.8.8}"
 HA_OPENSTACK_GLANCE_UPLOAD_TIMEOUT="${HA_OPENSTACK_GLANCE_UPLOAD_TIMEOUT:-3600}"
@@ -241,24 +242,33 @@ REMOTE
 
 builder_security_group_id() {
   if [[ -n "$HA_OPENSTACK_IMAGE_CACHE_SECURITY_GROUP" ]]; then
-    os openstack security group show "$HA_OPENSTACK_IMAGE_CACHE_SECURITY_GROUP" -f value -c id
+    printf '%s\n' "$HA_OPENSTACK_IMAGE_CACHE_SECURITY_GROUP"
     return
   fi
-
-  os openstack security group list --project admin -f value -c ID -c Name \
-    | awk '$2 == "default" {print $1; exit}'
+  local sg_name="$HA_OPENSTACK_IMAGE_CACHE_SECURITY_GROUP_NAME"
+  os openstack security group list -f value -c ID -c Name \
+    | awk -v n="$sg_name" '$2 == n {print $1; exit}'
 }
 
 ensure_builder_security_group() {
   local security_group_id
+  local sg_name="$HA_OPENSTACK_IMAGE_CACHE_SECURITY_GROUP_NAME"
 
   security_group_id="$(builder_security_group_id)"
   if [[ -z "$security_group_id" ]]; then
-    echo "unable to resolve image cache builder security group" >&2
-    return 1
+    log "creating dedicated image cache security group: ${sg_name}"
+    security_group_id="$(os openstack security group create "$sg_name" \
+      --description "Hybrid AI image cache builder" -f value -c id)"
+    if [[ -z "$security_group_id" ]]; then
+      echo "failed to create image cache security group: ${sg_name}" >&2
+      return 1
+    fi
   fi
 
-  os openstack security group rule create --proto tcp --dst-port 22 "$security_group_id" >/dev/null 2>&1 || true
+  os openstack security group rule create --proto tcp --dst-port 22 --ingress "$security_group_id" >/dev/null 2>&1 || true
+  os openstack security group rule create --proto icmp --ingress "$security_group_id" >/dev/null 2>&1 || true
+
+  export HA_OPENSTACK_IMAGE_CACHE_SECURITY_GROUP="$security_group_id"
 }
 
 ensure_glance_registered_limit() {

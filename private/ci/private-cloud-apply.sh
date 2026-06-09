@@ -174,6 +174,13 @@ log() {
   printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"
 }
 
+write_systemd_env_line() {
+  local file="$1" name="$2" value="$3"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '%s="%s"\n' "$name" "$value" >>"$file"
+}
+
 phase() {
   local name="$1"
   shift
@@ -1131,6 +1138,38 @@ Destroy an existing stack, lower VM counts/flavors, or increase OpenStack quota 
 EOF
   exit 1
 fi
+
+fip_limit="$(openstack network quota show "$quota_project" -f value -c floatingip 2>/dev/null || true)"
+if [[ "$fip_limit" =~ ^[0-9]+$ ]]; then
+  used_fips="$(openstack floating ip list --project "$quota_project" -f value -c ID 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+  [[ "$used_fips" =~ ^[0-9]+$ ]] || used_fips=0
+  available_fips=$(( fip_limit - used_fips ))
+  echo "quota preflight floating IPs: available=${available_fips}/${fip_limit} need=${need_instances}"
+  if (( need_instances > available_fips )); then
+    if [[ "$auto_expand_quota" == "true" ]]; then
+      target_fips=$(( used_fips + need_instances + quota_headroom_instances ))
+      if [[ "$fip_limit" -gt "$target_fips" ]]; then
+        target_fips="$fip_limit"
+      fi
+      echo "quota preflight auto-expanding Neutron floating IP quota for project ${quota_project}: floatingip=${target_fips}"
+      openstack network quota set --floating-ip "$target_fips" "$quota_project"
+      fip_limit="$(openstack network quota show "$quota_project" -f value -c floatingip 2>/dev/null || echo -1)"
+      used_fips="$(openstack floating ip list --project "$quota_project" -f value -c ID 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+      [[ "$fip_limit" =~ ^[0-9]+$ ]] || fip_limit=-1
+      [[ "$used_fips" =~ ^[0-9]+$ ]] || used_fips=0
+      available_fips=$(( fip_limit - used_fips ))
+      echo "quota preflight floating IPs after expansion: available=${available_fips}/${fip_limit}"
+    fi
+    if (( need_instances > available_fips )); then
+      cat >&2 <<EOF
+OpenStack quota preflight failed before Terraform apply.
+Floating IP quota insufficient for project '${quota_project}': need ${need_instances}, available ${available_fips}/${fip_limit}.
+Increase the Neutron floating IP quota or set HA_PRIVATE_CLOUD_AUTO_EXPAND_QUOTA=true.
+EOF
+      exit 1
+    fi
+  fi
+fi
 PREFLIGHT_OPENSTACK_QUOTA
 }
 
@@ -1330,6 +1369,9 @@ devstack_apply_check() {
   configure_vfio_guest_access
   ensure_flavors
   configure_gpu_passthrough
+  if [[ -z "${product_id}" && "${TF_VAR_gpu_worker_count:-0}" != "0" ]]; then
+    log "warning: gpu_worker_count=${TF_VAR_gpu_worker_count} but no NVIDIA GPU detected in the LXC container — GPU workers will be created without PCI passthrough"
+  fi
   ensure_devstack_egress
   ensure_horizon_proxy
   configure_horizon_proxy_settings
@@ -1365,6 +1407,9 @@ use_local_devstack_openstack_env() {
   export OS_PROJECT_DOMAIN_NAME="${HA_DEVSTACK_PROJECT_DOMAIN_NAME:-Default}"
   export OS_REGION_NAME="${HA_DEVSTACK_REGION_NAME:-RegionOne}"
   export OS_IDENTITY_API_VERSION="${OS_IDENTITY_API_VERSION:-3}"
+  # Use internal endpoints so Terraform doesn't re-auth against the public domain
+  # (which may differ from the local DevStack proxy path used for initial auth)
+  export OS_ENDPOINT_TYPE="${OS_ENDPOINT_TYPE:-internalURL}"
 }
 
 check_openstack_auth() {
@@ -1796,6 +1841,9 @@ VALUES
   minio_root_user="${MINIO_ROOT_USER:-${existing_minio_root_user:-minioadmin}}"
   minio_root_password="${MINIO_ROOT_PASSWORD:-${existing_minio_root_password:-}}"
   if [[ -z "${minio_root_password}" ]]; then
+    if [[ -z "${MINIO_ROOT_PASSWORD}" ]]; then
+      log "warning: MINIO_ROOT_PASSWORD is not set and no existing MinIO credentials found — generating a random password; set MINIO_ROOT_PASSWORD to preserve access across cluster reprovisioning"
+    fi
     minio_root_password="$(python3 - <<'PY'
 import secrets
 print(secrets.token_urlsafe(36))
@@ -1991,7 +2039,7 @@ REMOTE
 
 setup_harbor() {
   [[ "${HARBOR_INSTALL_ENABLED}" == "true" ]] || return 0
-  local target admin_password_file
+  local target admin_password_file harbor_env_file harbor_env_payload
 
   write_ssh_config
   target="$(first_harbor_ip)"
@@ -2010,30 +2058,31 @@ setup_harbor() {
   if [[ -n "${HARBOR_ADMIN_PASSWORD}" ]]; then
     admin_password_file="/tmp/harbor-admin-password-${RUN_ID}"
     printf '%s' "${HARBOR_ADMIN_PASSWORD}" | ssh -F "${SSH_CONFIG}" "${target}" "umask 077 && cat > ${admin_password_file}"
+  else
+    log "warning: HARBOR_ADMIN_PASSWORD is not set — Harbor will generate a random admin password stored only on the VM; reprovisioning the VM will lose it"
   fi
 
   ssh -F "${SSH_CONFIG}" "${target}" \
     "sudo install -m 0755 -o root -g root /dev/stdin /usr/local/sbin/hybrid-ai-harbor-bootstrap" \
     <"${ROOT}/private/openstack/scripts/hybrid-ai-harbor-bootstrap"
 
+  harbor_env_file="${LOG_DIR}/harbor-bootstrap.env"
+  : >"${harbor_env_file}"
+  write_systemd_env_line "${harbor_env_file}" HARBOR_DOMAIN "${HARBOR_DOMAIN}"
+  write_systemd_env_line "${harbor_env_file}" HARBOR_EXTERNAL_URL "${HARBOR_EXTERNAL_URL}"
+  write_systemd_env_line "${harbor_env_file}" HARBOR_VERSION "${HARBOR_VERSION}"
+  write_systemd_env_line "${harbor_env_file}" HARBOR_PROJECTS "${HARBOR_PROJECTS}"
+  write_systemd_env_line "${harbor_env_file}" HARBOR_ROBOT_NAME "${HARBOR_ROBOT_NAME}"
+  write_systemd_env_line "${harbor_env_file}" HARBOR_HTTP_PORT "${HARBOR_HTTP_PORT}"
+  write_systemd_env_line "${harbor_env_file}" HARBOR_BOOTSTRAP_WAIT_SECONDS "${HARBOR_BOOTSTRAP_WAIT_SECONDS}"
+  harbor_env_payload="$(base64 <"${harbor_env_file}" | tr -d '\n')"
+
   ssh -F "${SSH_CONFIG}" "${target}" bash -s -- \
-    "${HARBOR_DOMAIN}" \
-    "${HARBOR_EXTERNAL_URL}" \
-    "${HARBOR_VERSION}" \
-    "${HARBOR_PROJECTS}" \
-    "${HARBOR_ROBOT_NAME}" \
-    "${HARBOR_HTTP_PORT}" \
-    "${HARBOR_BOOTSTRAP_WAIT_SECONDS}" \
+    "${harbor_env_payload}" \
     "${admin_password_file}" <<'REMOTE'
 set -euo pipefail
-harbor_domain="$1"
-harbor_external_url="$2"
-harbor_version="$3"
-harbor_projects="$4"
-harbor_robot_name="$5"
-harbor_http_port="$6"
-harbor_bootstrap_wait_seconds="$7"
-harbor_admin_password_file="${8:-}"
+harbor_env_payload="$1"
+harbor_admin_password_file="${2:-}"
 
 cleanup() {
   if [[ -n "$harbor_admin_password_file" ]]; then
@@ -2051,20 +2100,14 @@ if [[ -n "$harbor_admin_password_file" && -s "$harbor_admin_password_file" ]]; t
 fi
 
 env_file_tmp="$(mktemp)"
-write_env_line() {
+printf '%s' "$harbor_env_payload" | base64 -d >"$env_file_tmp"
+append_env_line() {
   local name="$1" value="$2"
   value="${value//\\/\\\\}"
   value="${value//\"/\\\"}"
   printf '%s="%s"\n' "$name" "$value" >> "$env_file_tmp"
 }
-write_env_line HARBOR_DOMAIN "$harbor_domain"
-write_env_line HARBOR_EXTERNAL_URL "$harbor_external_url"
-write_env_line HARBOR_VERSION "$harbor_version"
-write_env_line HARBOR_PROJECTS "$harbor_projects"
-write_env_line HARBOR_ROBOT_NAME "$harbor_robot_name"
-write_env_line HARBOR_HTTP_PORT "$harbor_http_port"
-write_env_line HARBOR_BOOTSTRAP_WAIT_SECONDS "$harbor_bootstrap_wait_seconds"
-write_env_line HARBOR_ADMIN_PASSWORD_FILE "$installed_admin_password_file"
+append_env_line HARBOR_ADMIN_PASSWORD_FILE "$installed_admin_password_file"
 sudo install -m 0644 -o root -g root "$env_file_tmp" /etc/hybrid-ai/harbor-bootstrap.env
 rm -f "$env_file_tmp"
 
@@ -2090,8 +2133,9 @@ if ! sudo systemctl start hybrid-ai-harbor-bootstrap.service; then
   exit 1
 fi
 
-curl -fsS "http://127.0.0.1:${harbor_http_port}/api/v2.0/ping" >/dev/null 2>&1 \
-  || curl -fsS "http://127.0.0.1:${harbor_http_port}/api/v2.0/health" >/dev/null
+source /etc/hybrid-ai/harbor-bootstrap.env
+curl -fsS "http://127.0.0.1:${HARBOR_HTTP_PORT}/api/v2.0/ping" >/dev/null 2>&1 \
+  || curl -fsS "http://127.0.0.1:${HARBOR_HTTP_PORT}/api/v2.0/health" >/dev/null
 sudo cat /var/lib/hybrid-ai/harbor-bootstrap/status.env 2>/dev/null || true
 REMOTE
 

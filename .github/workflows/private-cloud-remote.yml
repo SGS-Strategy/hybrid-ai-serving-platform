@@ -105,6 +105,7 @@ jobs:
             printf '%s=%q\n' "$name" "$value" >> "$env_file"
           }
 
+          write_env GITHUB_ACTIONS "true"
           write_env GITHUB_RUN_ID "$GITHUB_RUN_ID"
           write_env GITHUB_RUN_ATTEMPT "$GITHUB_RUN_ATTEMPT"
           write_env GITHUB_SHA "$GITHUB_SHA"

@@ -252,7 +252,10 @@ required_project_paths() {
     "${HA_PROJECT_ROOT}/private/kubernetes/kustomization.yaml" \
     "${HA_PROJECT_ROOT}/private/storage/kustomization.yaml" \
     "${HA_PROJECT_ROOT}/private/gpu-worker/kustomization.yaml" \
-    "${HA_PROJECT_ROOT}/.github/workflows/private-cloud-foundation.yml"
+    "${HA_PROJECT_ROOT}/.github/workflows/private-cloud-remote.yml" \
+    "${HA_PROJECT_ROOT}/.github/workflows/private-cloud-plan.yml" \
+    "${HA_PROJECT_ROOT}/.github/workflows/private-cloud-apply.yml" \
+    "${HA_PROJECT_ROOT}/.github/workflows/private-cloud-destroy.yml"
 }
 
 default_launcher_locations() {

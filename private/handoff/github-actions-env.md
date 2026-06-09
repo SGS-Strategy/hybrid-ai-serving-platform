@@ -8,7 +8,7 @@
 private-cloud-plan      # 변경 검토, Terraform plan, DNS dry-run
 private-cloud-apply     # VM/K8s/storage/GitLab/GPU runner 적용
 private-cloud-destroy   # cleanup, Terraform destroy, DNS delete
-private-cloud-foundation # reusable core workflow
+private-cloud-remote    # reusable SSH executor workflow
 ```
 
 ## 환경 구분 계획

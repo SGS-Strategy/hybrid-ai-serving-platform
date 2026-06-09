@@ -59,7 +59,20 @@ write_tfvars_if_present() {
 
 devstack_openrc_password() {
   command -v lxc >/dev/null 2>&1 || return 0
-  lxc exec ha-openstack -- sudo -u stack -H bash -lc 'cd /opt/stack/devstack && set +u && source openrc admin admin >/dev/null && printf "%s" "${OS_PASSWORD:-}"' 2>/dev/null || true
+  local result
+  result="$(lxc exec ha-openstack -- sudo -u stack -H bash -lc 'cd /opt/stack/devstack && set +u && source openrc admin admin >/dev/null && printf "%s" "${OS_PASSWORD:-}"' 2>/dev/null || true)"
+  if [[ -z "$result" ]]; then
+    printf '[private-cloud-destroy] warning: could not read DevStack admin password from openrc; falling back to HA_DEVSTACK_PASSWORD\n' >&2
+  fi
+  printf '%s' "$result"
+}
+
+ensure_horizon_proxy_if_available() {
+  command -v lxc >/dev/null 2>&1 || return 0
+  lxc info ha-openstack >/dev/null 2>&1 || return 0
+  lxc config device remove ha-openstack horizon-proxy >/dev/null 2>&1 || true
+  lxc config device add ha-openstack horizon-proxy proxy \
+    listen=tcp:127.0.0.1:18081 connect=tcp:127.0.0.1:80 >/dev/null 2>&1 || true
 }
 
 prepare_local_devstack_env() {
@@ -79,6 +92,9 @@ prepare_local_devstack_env() {
   export OS_PROJECT_DOMAIN_NAME="${HA_DEVSTACK_PROJECT_DOMAIN_NAME:-Default}"
   export OS_REGION_NAME="${HA_DEVSTACK_REGION_NAME:-RegionOne}"
   export OS_IDENTITY_API_VERSION="${OS_IDENTITY_API_VERSION:-3}"
+  # Use internal endpoints so Terraform doesn't re-auth against the public domain
+  # (which may differ from the local DevStack proxy used for initial auth)
+  export OS_ENDPOINT_TYPE="${OS_ENDPOINT_TYPE:-internalURL}"
 }
 
 check_openstack_auth() {
@@ -345,6 +361,16 @@ if [[ -n "$sg_id" ]]; then
   openstack security group delete "$sg_id" || true
 fi
 
+cache_sg_id="$(openstack security group list -f value -c ID -c Name | awk '$2 == "hybrid-ai-image-cache-sg" {print $1; exit}')"
+if [[ -n "$cache_sg_id" ]]; then
+  openstack security group delete "$cache_sg_id" || true
+fi
+
+cache_keypair="$(openstack keypair list -f value -c Name | awk '$1 == "hybrid-ai-image-cache-builder" {print $1; exit}')"
+if [[ -n "$cache_keypair" ]]; then
+  openstack keypair delete "$cache_keypair" || true
+fi
+
 for key_name in "${prefix}-admin" hybrid-ai-actions-admin; do
   if openstack keypair show "$key_name" >/dev/null 2>&1; then
     openstack keypair delete "$key_name" || true
@@ -357,6 +383,7 @@ main() {
   require_tool terraform
   require_tool python3
   local destroy_rc
+  ensure_horizon_proxy_if_available
   prepare_local_devstack_env
   check_openstack_auth
   prepare_ssh_public_key
