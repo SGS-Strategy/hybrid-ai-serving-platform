@@ -20,11 +20,12 @@ on:
 permissions:
   contents: read
 
-# Run-level exclusivity (shared with destroy). A newer apply cancels a stalled
-# older run; the provision job additionally clears any orphaned host processes.
+# Run-level exclusivity (shared with destroy and the phase workflows). Keep the
+# full apply serialized so GitLab/Harbor bootstrap does not contend with k8s
+# provisioning on the same OpenStack host.
 concurrency:
   group: private-cloud-foundation
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   # Entry job: pins the host commit, then runs tools/devstack/images/terraform.
@@ -52,11 +53,11 @@ jobs:
       do_cleanup: false
     secrets: inherit
 
-  # Registry services: gitlab and harbor (parallel internally). Independent of k8s,
-  # so it runs in parallel with the platform job.
+  # Registry services: gitlab and harbor. Keep this after platform to avoid
+  # overlapping VM/disk-heavy bootstrap work on the same host.
   registry:
     name: Registry (gitlab + harbor)
-    needs: provision
+    needs: platform
     uses: ./.github/workflows/private-cloud-remote.yml
     with:
       command: apply

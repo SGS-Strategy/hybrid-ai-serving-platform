@@ -6,7 +6,11 @@
 
 ```text
 private-cloud-plan      # 변경 검토, Terraform plan, DNS dry-run
-private-cloud-apply     # VM/K8s/storage/GitLab/GPU runner 적용
+private-cloud-apply     # provision -> platform -> registry -> finalize 전체 적용
+private-cloud-provision # DevStack/OpenStack image/Terraform VM 적용
+private-cloud-platform  # Kubernetes bootstrap, storage, model build platform
+private-cloud-registry  # GitLab/Harbor registry 서비스 적용
+private-cloud-finalize  # cleanup, optional GPU validation
 private-cloud-destroy   # cleanup, Terraform destroy, DNS delete
 private-cloud-remote    # reusable SSH executor workflow
 ```
