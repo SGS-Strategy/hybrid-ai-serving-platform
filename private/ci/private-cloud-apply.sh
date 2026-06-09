@@ -1490,10 +1490,9 @@ EnvironmentFile=/etc/hybrid-ai/caddy.env
 EOF
 }
 
-setup_reverse_proxy() {
+setup_host_reverse_proxy() {
   local config_path mode
 
-  [[ "${PRIVATE_CLOUD_PROXY_ENABLED}" == "true" ]] || return 0
   install_host_caddy_if_needed
   write_caddy_environment
 
@@ -1537,6 +1536,135 @@ setup_reverse_proxy() {
   sudo systemctl enable --now caddy
   sudo systemctl restart caddy
   log "reverse proxy ready with ${mode} TLS profile"
+}
+
+write_lxc_caddyfile() {
+  local gitlab_ip harbor_ip caddyfile
+
+  gitlab_ip="$(first_gitlab_ip || true)"
+  harbor_ip="$(first_harbor_ip || true)"
+  [[ -n "$gitlab_ip" ]] || gitlab_ip="127.0.0.1"
+  [[ -n "$harbor_ip" ]] || harbor_ip="127.0.0.1"
+  caddyfile="${LOG_DIR}/Caddyfile.lxc"
+
+  cat >"${caddyfile}" <<EOF
+{
+	auto_https off
+}
+
+http://openstack.${PRIVATE_CLOUD_BASE_DOMAIN}:8088,
+http://k8s.${PRIVATE_CLOUD_BASE_DOMAIN}:8088,
+http://grafana.${PRIVATE_CLOUD_BASE_DOMAIN}:8088,
+http://argocd.${PRIVATE_CLOUD_BASE_DOMAIN}:8088,
+http://${GITLAB_DOMAIN}:8088,
+http://${HARBOR_DOMAIN}:8088 {
+	redir https://{host}{uri} permanent
+}
+
+openstack.${PRIVATE_CLOUD_BASE_DOMAIN}:8443 {
+	tls /etc/hybrid-ai/caddy/intp.me.crt /etc/hybrid-ai/caddy/intp.me.key
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:80 {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto https
+	}
+}
+
+k8s.${PRIVATE_CLOUD_BASE_DOMAIN}:8443 {
+	tls /etc/hybrid-ai/caddy/intp.me.crt /etc/hybrid-ai/caddy/intp.me.key
+	encode zstd gzip
+	respond "k8s dashboard upstream is not attached to the LXC reverse proxy" 503
+}
+
+grafana.${PRIVATE_CLOUD_BASE_DOMAIN}:8443 {
+	tls /etc/hybrid-ai/caddy/intp.me.crt /etc/hybrid-ai/caddy/intp.me.key
+	encode zstd gzip
+	respond "grafana upstream is not attached to the LXC reverse proxy" 503
+}
+
+argocd.${PRIVATE_CLOUD_BASE_DOMAIN}:8443 {
+	tls /etc/hybrid-ai/caddy/intp.me.crt /etc/hybrid-ai/caddy/intp.me.key
+	encode zstd gzip
+	respond "argocd upstream is not attached to the LXC reverse proxy" 503
+}
+
+${GITLAB_DOMAIN}:8443 {
+	tls /etc/hybrid-ai/caddy/intp.me.crt /etc/hybrid-ai/caddy/intp.me.key
+	encode zstd gzip
+	reverse_proxy ${gitlab_ip}:80 {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-Ssl on
+		header_up X-Forwarded-Port 443
+	}
+}
+
+${HARBOR_DOMAIN}:8443 {
+	tls /etc/hybrid-ai/caddy/intp.me.crt /etc/hybrid-ai/caddy/intp.me.key
+	encode zstd gzip
+	reverse_proxy ${harbor_ip}:${HARBOR_HTTP_PORT} {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-Ssl on
+		header_up X-Forwarded-Port 443
+	}
+}
+EOF
+  printf '%s\n' "$caddyfile"
+}
+
+setup_lxc_reverse_proxy() {
+  local caddyfile
+
+  ensure_devstack_container_running
+  caddyfile="$(write_lxc_caddyfile)"
+  lxc exec ha-openstack -- bash -s -- "${PRIVATE_CLOUD_BASE_DOMAIN}" <<'REMOTE'
+set -euo pipefail
+base_domain="$1"
+export DEBIAN_FRONTEND=noninteractive
+systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service >/dev/null 2>&1 || true
+if ! command -v caddy >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1; then
+  apt-get -o Dpkg::Lock::Timeout=900 update -qq
+  apt-get -o Dpkg::Lock::Timeout=900 install -y -qq caddy openssl
+fi
+install -d -m 0755 /etc/hybrid-ai/caddy /etc/caddy
+if [[ ! -s /etc/hybrid-ai/caddy/intp.me.crt || ! -s /etc/hybrid-ai/caddy/intp.me.key ]]; then
+  openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
+    -keyout /etc/hybrid-ai/caddy/intp.me.key \
+    -out /etc/hybrid-ai/caddy/intp.me.crt \
+    -subj "/CN=*.${base_domain}" \
+    -addext "subjectAltName=DNS:${base_domain},DNS:*.${base_domain}" >/dev/null 2>&1
+  chmod 0644 /etc/hybrid-ai/caddy/intp.me.crt
+  chmod 0640 /etc/hybrid-ai/caddy/intp.me.key
+  chgrp caddy /etc/hybrid-ai/caddy/intp.me.key >/dev/null 2>&1 || true
+fi
+REMOTE
+  lxc exec ha-openstack -- tee /etc/caddy/Caddyfile >/dev/null <"${caddyfile}"
+  lxc exec ha-openstack -- caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+  lxc exec ha-openstack -- systemctl enable --now caddy
+  lxc exec ha-openstack -- systemctl restart caddy
+
+  lxc config device remove ha-openstack hybrid-ai-public-http >/dev/null 2>&1 || true
+  lxc config device remove ha-openstack hybrid-ai-public-https >/dev/null 2>&1 || true
+  lxc config device add ha-openstack hybrid-ai-public-http proxy \
+    listen=tcp:0.0.0.0:80 connect=tcp:127.0.0.1:8088 >/dev/null
+  lxc config device add ha-openstack hybrid-ai-public-https proxy \
+    listen=tcp:0.0.0.0:443 connect=tcp:127.0.0.1:8443 >/dev/null
+  log "reverse proxy ready with LXC internal TLS fallback"
+}
+
+setup_reverse_proxy() {
+  [[ "${PRIVATE_CLOUD_PROXY_ENABLED}" == "true" ]] || return 0
+
+  if sudo -n true >/dev/null 2>&1; then
+    setup_host_reverse_proxy
+  else
+    log "host sudo is unavailable; using LXC reverse proxy fallback"
+    setup_lxc_reverse_proxy
+  fi
 }
 
 devstack_reinstall() {
