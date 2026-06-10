@@ -16,6 +16,16 @@ spec:
       valuesObject:
         nodeSelector:
           workload: general
+        # HA 설정: KEDA 중단 시 inference 오토스케일링 전체 멈춤 방지
+        replicaCount: 2
+        priorityClassName: keda-critical
+        affinity:
+          podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: keda-operator
+                topologyKey: kubernetes.io/hostname
   destination:
     server: https://kubernetes.default.svc
     namespace: keda
