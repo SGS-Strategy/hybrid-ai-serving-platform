@@ -1,9 +1,4 @@
 # GitHub-hosted runner는 private EKS API에 접근할 수 없으므로, 이 Kubernetes/Helm Terraform 리소스는 SSM 관리 인스턴스에서 실행
-resource "kubernetes_namespace" "argocd" {
-  metadata {
-    name = "argocd"
-  }
-}
 
 resource "helm_release" "argocd" {
   name             = "argocd"

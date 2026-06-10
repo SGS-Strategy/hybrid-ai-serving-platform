@@ -2,6 +2,9 @@ resource "kubernetes_namespace" "inference" {
   metadata {
     name = "inference"
   }
+  timeouts {
+    delete = "5m"
+  }
 }
 
 resource "kubernetes_config_map" "inference_config" {

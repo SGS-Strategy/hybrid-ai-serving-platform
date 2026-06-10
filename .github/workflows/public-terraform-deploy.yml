@@ -345,6 +345,8 @@ jobs:
               f"echo {os.environ['INCLUSTER_TF_B64']} | base64 -d > /tmp/hasp-bootstrap/terraform-incluster.tar.gz",
               "tar -xzf /tmp/hasp-bootstrap/terraform-incluster.tar.gz -C /tmp/hasp-bootstrap",
               "terraform -chdir=/tmp/hasp-bootstrap/terraform-incluster init",
+              # destroy 시 namespace finalizer로 인한 타임아웃 방지: namespace finalizer 제거 후 state에서 제거
+              "if [ '{}' = 'destroy' ]; then kubectl patch namespace argocd -p '{{\"metadata\":{{\"finalizers\":[]}}}}' --type=merge 2>/dev/null || true; kubectl patch namespace inference -p '{{\"metadata\":{{\"finalizers\":[]}}}}' --type=merge 2>/dev/null || true; kubectl delete namespace argocd inference --force --grace-period=0 2>/dev/null || true; sleep 10; terraform -chdir=/tmp/hasp-bootstrap/terraform-incluster state rm kubernetes_namespace.argocd kubernetes_namespace.inference 2>/dev/null || true; fi".format(tf_action),
               tf_command,
           ]
 
