@@ -199,9 +199,14 @@ def _defer_retry_record(consumer: KafkaConsumer, record, next_attempt_at: int) -
 
 
 def _process_message(payload: dict[str, Any]) -> dict[str, Any]:
+    # retry_count, source_topic 등 워커 내부 메타데이터는 제외하고 predictor에 전달
+    # TODO: 최종 이미지 확정 시 페이로드 구조 및 엔드포인트 재검토 필요
     predictor_payload = {
+        "request_id": payload.get("request_id", ""),
+        "factory_id": payload.get("factory_id", ""),
+        "equipment_id": payload.get("equipment_id", ""),
+        "timestamp": payload.get("timestamp"),
         "inputs": payload.get("inputs", []),
-        "parameters": payload.get("parameters", {}),
     }
     with httpx.Client(timeout=30.0) as client:
         response = client.post(_predict_url(), json=predictor_payload)
@@ -245,7 +250,9 @@ def run() -> None:
                             break
 
                         result = _process_message(payload)
-                        prediction = result[0].get("class_name") if isinstance(result, list) else result.get("class_name", "Unknown")
+                        # 호성님 응답 구조: {"predictions": [{"class_name": ..., ...}]}
+                        predictions = result.get("predictions", [])
+                        prediction = predictions[0].get("class_name", "Unknown") if predictions else "Unknown"
 
                         _save_result(
                             results_table,
