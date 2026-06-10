@@ -78,6 +78,11 @@ HA_OPENSTACK_GLANCE_STORE_LXD_DEVICE="${HA_OPENSTACK_GLANCE_STORE_LXD_DEVICE:-hy
 HA_OPENSTACK_NOVA_INSTANCES_LXD_DEVICE="${HA_OPENSTACK_NOVA_INSTANCES_LXD_DEVICE:-hybrid-ai-nova-instances}"
 HA_OPENSTACK_GLANCE_STORE_CONTAINER_DIR="${HA_OPENSTACK_GLANCE_STORE_CONTAINER_DIR:-/opt/stack/data/glance/images}"
 HA_OPENSTACK_NOVA_INSTANCES_CONTAINER_DIR="${HA_OPENSTACK_NOVA_INSTANCES_CONTAINER_DIR:-/opt/stack/data/nova/instances}"
+HA_DEVSTACK_CACHE_ENABLED="${HA_DEVSTACK_CACHE_ENABLED:-true}"
+HA_DEVSTACK_CACHE_DIR="${HA_DEVSTACK_CACHE_DIR:-${ROOT}/.ha/openstack/devstack-cache}"
+HA_DEVSTACK_APT_CACHE_DIR="${HA_DEVSTACK_APT_CACHE_DIR:-${HA_DEVSTACK_CACHE_DIR}/apt/archives}"
+HA_DEVSTACK_ROOT_CACHE_DIR="${HA_DEVSTACK_ROOT_CACHE_DIR:-${HA_DEVSTACK_CACHE_DIR}/root-cache}"
+HA_DEVSTACK_STACK_CACHE_DIR="${HA_DEVSTACK_STACK_CACHE_DIR:-${HA_DEVSTACK_CACHE_DIR}/stack-cache}"
 PRIVATE_CLOUD_BASE_DOMAIN="${PRIVATE_CLOUD_BASE_DOMAIN:-intp.me}"
 OS_PASSWORD_INPUT_PROVIDED=false
 [[ -n "${OS_PASSWORD+x}" ]] && OS_PASSWORD_INPUT_PROVIDED=true
@@ -544,6 +549,83 @@ configure_lxc_devices() {
   add_lxc_vfio_devices
 }
 
+configure_devstack_cache_mount() {
+  local device="$1"
+  local host_dir="$2"
+  local container_dir="$3"
+  local container_parent source path
+
+  [[ "${HA_DEVSTACK_CACHE_ENABLED}" == "true" ]] || return 0
+
+  mkdir -p "$host_dir"
+  container_parent="${container_dir%/*}"
+  lxc exec ha-openstack -- mkdir -p "$container_parent" >/dev/null
+
+  source="$(lxc config device get ha-openstack "$device" source 2>/dev/null || true)"
+  path="$(lxc config device get ha-openstack "$device" path 2>/dev/null || true)"
+  if [[ -n "$source" || -n "$path" ]]; then
+    if [[ "$source" != "$host_dir" || "$path" != "$container_dir" ]]; then
+      lxc config device remove ha-openstack "$device" >/dev/null
+      source=""
+      path=""
+    fi
+  fi
+  if [[ -z "$source" && -z "$path" ]]; then
+    lxc config device add ha-openstack "$device" disk \
+      source="$host_dir" \
+      path="$container_dir" >/dev/null
+  fi
+}
+
+configure_devstack_apt_cache() {
+  [[ "${HA_DEVSTACK_CACHE_ENABLED}" == "true" ]] || return 0
+
+  log "configuring DevStack APT package cache"
+  configure_devstack_cache_mount \
+    hybrid-ai-devstack-apt-cache \
+    "$HA_DEVSTACK_APT_CACHE_DIR" \
+    /var/cache/apt/archives
+  lxc exec ha-openstack -- bash -s <<'CONFIGURE_DEVSTACK_APT_CACHE'
+set -euo pipefail
+install -d -m 0755 /var/cache/apt/archives
+install -d -m 0700 /var/cache/apt/archives/partial
+if getent passwd _apt >/dev/null 2>&1; then
+  chown _apt:root /var/cache/apt/archives/partial
+fi
+cat >/etc/apt/apt.conf.d/99hybrid-ai-cache <<'EOF'
+Binary::apt::APT::Keep-Downloaded-Packages "true";
+APT::Keep-Downloaded-Packages "true";
+Acquire::Retries "5";
+Acquire::ForceIPv4 "true";
+EOF
+CONFIGURE_DEVSTACK_APT_CACHE
+}
+
+configure_devstack_user_caches() {
+  [[ "${HA_DEVSTACK_CACHE_ENABLED}" == "true" ]] || return 0
+
+  log "configuring DevStack root/stack user caches"
+  configure_devstack_cache_mount \
+    hybrid-ai-devstack-root-cache \
+    "$HA_DEVSTACK_ROOT_CACHE_DIR" \
+    /root/.cache
+  configure_devstack_cache_mount \
+    hybrid-ai-devstack-stack-cache \
+    "$HA_DEVSTACK_STACK_CACHE_DIR" \
+    /opt/stack/.cache
+  lxc exec ha-openstack -- bash -s <<'CONFIGURE_DEVSTACK_USER_CACHES'
+set -euo pipefail
+install -d -m 0755 /root/.cache /root/.cache/pip
+if id stack >/dev/null 2>&1; then
+  install -d -o stack -g stack -m 0755 /opt/stack/.cache /opt/stack/.cache/pip
+fi
+cat >/etc/pip.conf <<'EOF'
+[global]
+disable-pip-version-check = true
+EOF
+CONFIGURE_DEVSTACK_USER_CACHES
+}
+
 configure_vfio_guest_access() {
   lxc exec ha-openstack -- bash -s <<'CONFIGURE_VFIO_GUEST_ACCESS'
 set -euo pipefail
@@ -655,7 +737,9 @@ create_devstack_container() {
   configure_lxc_devices
   lxc start ha-openstack
   wait_lxc_ip
+  lxc exec ha-openstack -- cloud-init status --wait >/dev/null 2>&1 || true
   configure_vfio_guest_access
+  configure_devstack_apt_cache
   lxc list ha-openstack
 }
 
@@ -728,6 +812,7 @@ install_devstack_prereqs() {
     chmod 440 /etc/sudoers.d/stack
     chown -R stack:stack /opt/stack
   '
+  configure_devstack_user_caches
   configure_devstack_persistent_storage
 }
 

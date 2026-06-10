@@ -32,6 +32,8 @@ Terraform variables
 - Harbor는 별도 영속 registry VM입니다.
 - Argo Workflows와 Kaniko는 Kubernetes 내부 실행 구성입니다.
 - OpenStack image cache는 dependency manifest hash 기반으로 재빌드합니다.
+- DevStack full init 캐시는 `.ha/openstack/devstack-cache`에 남기며, APT archives와 root/stack pip cache를 LXD disk device로 재사용합니다.
+- 캐시를 끄려면 `HA_DEVSTACK_CACHE_ENABLED=false`를 Actions 환경에 지정합니다.
 
 ## GitLab bootstrap 변수
 

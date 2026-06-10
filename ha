@@ -1352,6 +1352,11 @@ export HA_OPENSTACK_PERSISTENT_STORAGE="${HA_OPENSTACK_PERSISTENT_STORAGE:-true}
 export HA_OPENSTACK_PERSISTENT_DIR="${HA_OPENSTACK_PERSISTENT_DIR:-.ha/openstack/persistent}"
 export HA_OPENSTACK_GLANCE_STORE_DIR="${HA_OPENSTACK_GLANCE_STORE_DIR:-${HA_OPENSTACK_PERSISTENT_DIR}/glance-images}"
 export HA_OPENSTACK_NOVA_INSTANCES_DIR="${HA_OPENSTACK_NOVA_INSTANCES_DIR:-${HA_OPENSTACK_PERSISTENT_DIR}/nova-instances}"
+export HA_DEVSTACK_CACHE_ENABLED="${HA_DEVSTACK_CACHE_ENABLED:-true}"
+export HA_DEVSTACK_CACHE_DIR="${HA_DEVSTACK_CACHE_DIR:-.ha/openstack/devstack-cache}"
+export HA_DEVSTACK_APT_CACHE_DIR="${HA_DEVSTACK_APT_CACHE_DIR:-${HA_DEVSTACK_CACHE_DIR}/apt/archives}"
+export HA_DEVSTACK_ROOT_CACHE_DIR="${HA_DEVSTACK_ROOT_CACHE_DIR:-${HA_DEVSTACK_CACHE_DIR}/root-cache}"
+export HA_DEVSTACK_STACK_CACHE_DIR="${HA_DEVSTACK_STACK_CACHE_DIR:-${HA_DEVSTACK_CACHE_DIR}/stack-cache}"
 export TF_BACKEND_TYPE="${TF_BACKEND_TYPE:-s3}"
 
 # OpenStack VM Kubernetes bootstrap settings.
@@ -2416,6 +2421,7 @@ ensure_openstack_lxd_container() {
   fi
 
   lxc exec "$name" -- cloud-init status --wait >/dev/null 2>&1 || true
+  configure_openstack_devstack_apt_cache "$name"
 }
 
 ensure_openstack_lxd_kernel_modules() {
@@ -2436,6 +2442,84 @@ openstack_persistent_path() {
   else
     printf '%s/%s\n' "$HA_PROJECT_ROOT" "$path"
   fi
+}
+
+configure_openstack_devstack_cache_mount() {
+  local name="$1"
+  local device="$2"
+  local host_dir="$3"
+  local container_dir="$4"
+  local container_parent source path
+
+  [[ "${HA_DEVSTACK_CACHE_ENABLED:-true}" == "true" ]] || return 0
+
+  mkdir -p "$host_dir"
+  container_parent="${container_dir%/*}"
+  lxc exec "$name" -- mkdir -p "$container_parent" >/dev/null
+
+  source="$(lxc config device get "$name" "$device" source 2>/dev/null || true)"
+  path="$(lxc config device get "$name" "$device" path 2>/dev/null || true)"
+  if [[ -n "$source" || -n "$path" ]]; then
+    if [[ "$source" != "$host_dir" || "$path" != "$container_dir" ]]; then
+      lxc config device remove "$name" "$device" >/dev/null
+      source=""
+      path=""
+    fi
+  fi
+  if [[ -z "$source" && -z "$path" ]]; then
+    lxc config device add "$name" "$device" disk \
+      source="$host_dir" \
+      path="$container_dir" >/dev/null
+  fi
+}
+
+configure_openstack_devstack_apt_cache() {
+  local name="$1"
+  local cache_dir
+
+  [[ "${HA_DEVSTACK_CACHE_ENABLED:-true}" == "true" ]] || return 0
+
+  cache_dir="$(openstack_persistent_path "${HA_DEVSTACK_APT_CACHE_DIR:-.ha/openstack/devstack-cache/apt/archives}")"
+  info "Configuring DevStack APT package cache"
+  configure_openstack_devstack_cache_mount "$name" hybrid-ai-devstack-apt-cache "$cache_dir" /var/cache/apt/archives
+  lxc exec "$name" -- bash -s <<'EOS'
+set -euo pipefail
+install -d -m 0755 /var/cache/apt/archives
+install -d -m 0700 /var/cache/apt/archives/partial
+if getent passwd _apt >/dev/null 2>&1; then
+  chown _apt:root /var/cache/apt/archives/partial
+fi
+cat >/etc/apt/apt.conf.d/99hybrid-ai-cache <<'EOF'
+Binary::apt::APT::Keep-Downloaded-Packages "true";
+APT::Keep-Downloaded-Packages "true";
+Acquire::Retries "5";
+Acquire::ForceIPv4 "true";
+EOF
+EOS
+}
+
+configure_openstack_devstack_user_caches() {
+  local name="$1"
+  local root_cache_dir stack_cache_dir
+
+  [[ "${HA_DEVSTACK_CACHE_ENABLED:-true}" == "true" ]] || return 0
+
+  root_cache_dir="$(openstack_persistent_path "${HA_DEVSTACK_ROOT_CACHE_DIR:-.ha/openstack/devstack-cache/root-cache}")"
+  stack_cache_dir="$(openstack_persistent_path "${HA_DEVSTACK_STACK_CACHE_DIR:-.ha/openstack/devstack-cache/stack-cache}")"
+  info "Configuring DevStack root/stack user caches"
+  configure_openstack_devstack_cache_mount "$name" hybrid-ai-devstack-root-cache "$root_cache_dir" /root/.cache
+  configure_openstack_devstack_cache_mount "$name" hybrid-ai-devstack-stack-cache "$stack_cache_dir" /opt/stack/.cache
+  lxc exec "$name" -- bash -s <<'EOS'
+set -euo pipefail
+install -d -m 0755 /root/.cache /root/.cache/pip
+if id stack >/dev/null 2>&1; then
+  install -d -o stack -g stack -m 0755 /opt/stack/.cache /opt/stack/.cache/pip
+fi
+cat >/etc/pip.conf <<'EOF'
+[global]
+disable-pip-version-check = true
+EOF
+EOS
 }
 
 configure_openstack_persistent_mount() {
@@ -2616,6 +2700,7 @@ install_lxd_devstack() {
     chmod 440 /etc/sudoers.d/stack
     chown -R stack:stack /opt/stack
   '
+  configure_openstack_devstack_user_caches "$name"
   configure_openstack_persistent_storage "$name"
 
   if ! lxc exec "$name" -- test -d /opt/stack/devstack/.git; then

@@ -16,6 +16,11 @@ GLANCE_STORE_LXD_DEVICE="${HA_OPENSTACK_GLANCE_STORE_LXD_DEVICE:-hybrid-ai-glanc
 NOVA_INSTANCES_LXD_DEVICE="${HA_OPENSTACK_NOVA_INSTANCES_LXD_DEVICE:-hybrid-ai-nova-instances}"
 GLANCE_STORE_CONTAINER_DIR="${HA_OPENSTACK_GLANCE_STORE_CONTAINER_DIR:-/opt/stack/data/glance/images}"
 NOVA_INSTANCES_CONTAINER_DIR="${HA_OPENSTACK_NOVA_INSTANCES_CONTAINER_DIR:-/opt/stack/data/nova/instances}"
+DEVSTACK_CACHE_ENABLED="${HA_DEVSTACK_CACHE_ENABLED:-true}"
+DEVSTACK_CACHE_DIR="${HA_DEVSTACK_CACHE_DIR:-${PROJECT_ROOT}/.ha/openstack/devstack-cache}"
+DEVSTACK_APT_CACHE_DIR="${HA_DEVSTACK_APT_CACHE_DIR:-${DEVSTACK_CACHE_DIR}/apt/archives}"
+DEVSTACK_ROOT_CACHE_DIR="${HA_DEVSTACK_ROOT_CACHE_DIR:-${DEVSTACK_CACHE_DIR}/root-cache}"
+DEVSTACK_STACK_CACHE_DIR="${HA_DEVSTACK_STACK_CACHE_DIR:-${DEVSTACK_CACHE_DIR}/stack-cache}"
 GPU_PCI_ALIAS="${HA_OPENSTACK_GPU_PCI_ALIAS:-nvidia-gpu}"
 GPU_PCI_VENDOR_ID="$(printf '%s' "${HA_OPENSTACK_GPU_PCI_VENDOR_ID:-10de}" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')"
 GPU_PCI_PRODUCT_ID="${HA_OPENSTACK_GPU_PCI_PRODUCT_ID:-auto}"
@@ -142,6 +147,83 @@ configure_lxc_devices() {
   fi
 }
 
+configure_devstack_cache_mount() {
+  local device="$1"
+  local host_dir="$2"
+  local container_dir="$3"
+  local container_parent source path
+
+  [[ "$DEVSTACK_CACHE_ENABLED" == "true" ]] || return 0
+
+  mkdir -p "$host_dir"
+  container_parent="${container_dir%/*}"
+  lxc exec "$CONTAINER" -- mkdir -p "$container_parent" >/dev/null
+
+  source="$(lxc config device get "$CONTAINER" "$device" source 2>/dev/null || true)"
+  path="$(lxc config device get "$CONTAINER" "$device" path 2>/dev/null || true)"
+  if [[ -n "$source" || -n "$path" ]]; then
+    if [[ "$source" != "$host_dir" || "$path" != "$container_dir" ]]; then
+      lxc config device remove "$CONTAINER" "$device" >/dev/null
+      source=""
+      path=""
+    fi
+  fi
+  if [[ -z "$source" && -z "$path" ]]; then
+    lxc config device add "$CONTAINER" "$device" disk \
+      source="$host_dir" \
+      path="$container_dir" >/dev/null
+  fi
+}
+
+configure_devstack_apt_cache() {
+  [[ "$DEVSTACK_CACHE_ENABLED" == "true" ]] || return 0
+
+  info "Configuring DevStack APT package cache"
+  configure_devstack_cache_mount \
+    hybrid-ai-devstack-apt-cache \
+    "$DEVSTACK_APT_CACHE_DIR" \
+    /var/cache/apt/archives
+  lxc exec "$CONTAINER" -- bash -s <<'EOS'
+set -euo pipefail
+install -d -m 0755 /var/cache/apt/archives
+install -d -m 0700 /var/cache/apt/archives/partial
+if getent passwd _apt >/dev/null 2>&1; then
+  chown _apt:root /var/cache/apt/archives/partial
+fi
+cat >/etc/apt/apt.conf.d/99hybrid-ai-cache <<'EOF'
+Binary::apt::APT::Keep-Downloaded-Packages "true";
+APT::Keep-Downloaded-Packages "true";
+Acquire::Retries "5";
+Acquire::ForceIPv4 "true";
+EOF
+EOS
+}
+
+configure_devstack_user_caches() {
+  [[ "$DEVSTACK_CACHE_ENABLED" == "true" ]] || return 0
+
+  info "Configuring DevStack root/stack user caches"
+  configure_devstack_cache_mount \
+    hybrid-ai-devstack-root-cache \
+    "$DEVSTACK_ROOT_CACHE_DIR" \
+    /root/.cache
+  configure_devstack_cache_mount \
+    hybrid-ai-devstack-stack-cache \
+    "$DEVSTACK_STACK_CACHE_DIR" \
+    /opt/stack/.cache
+  lxc exec "$CONTAINER" -- bash -s <<'EOS'
+set -euo pipefail
+install -d -m 0755 /root/.cache /root/.cache/pip
+if id stack >/dev/null 2>&1; then
+  install -d -o stack -g stack -m 0755 /opt/stack/.cache /opt/stack/.cache/pip
+fi
+cat >/etc/pip.conf <<'EOF'
+[global]
+disable-pip-version-check = true
+EOF
+EOS
+}
+
 persistent_host_path() {
   local path="$1"
   if [[ "$path" == /* ]]; then
@@ -234,6 +316,7 @@ ensure_container() {
   fi
 
   lxc exec "$CONTAINER" -- cloud-init status --wait >/dev/null 2>&1 || true
+  configure_devstack_apt_cache
 }
 
 ensure_kernel_modules() {
@@ -383,6 +466,7 @@ prepare_container() {
     chmod 440 /etc/sudoers.d/stack
     chown -R stack:stack /opt/stack
   '
+  configure_devstack_user_caches
 }
 
 clone_devstack() {
