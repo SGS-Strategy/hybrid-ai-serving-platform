@@ -5,3 +5,5 @@ scikit-learn
 torch
 joblib
 minio
+fastapi
+uvicorn

@@ -1,0 +1,87 @@
+name: Model Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - feature/model
+    paths:
+      - 'model/**'
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REGISTRY: 808379768010.dkr.ecr.ap-northeast-2.amazonaws.com
+  ECR_REPOSITORY: predictive-model
+  IMAGE_TAG: v1
+
+jobs:
+  model-build:
+    name: Step1 - Model Training
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install -r model/requirements.txt
+
+      - name: Run model_build.py
+        run: |
+          cd model
+          python model_build.py
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-artifacts
+          path: |
+            model/model.pt
+            model/scaler.pkl
+
+  model-package:
+    name: Step2 - Build & Push to ECR
+    runs-on: ubuntu-latest
+    needs: model-build
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: model-artifacts
+          path: model/
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -f model/Dockerfile.predictor \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            model/
+
+      - name: Push to ECR
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "✅ Push 완료: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
