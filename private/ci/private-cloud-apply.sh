@@ -1594,16 +1594,17 @@ PREFLIGHT_OPENSTACK_QUOTA
 }
 
 preflight_host_capacity() {
-  local control_count="$1"
-  local control_flavor="$2"
-  local build_count="$3"
-  local build_flavor="$4"
-  local gpu_count="$5"
-  local gpu_flavor="$6"
-  local gitlab_count="$7"
-  local gitlab_flavor="$8"
-  local harbor_count="$9"
-  local harbor_flavor="${10}"
+  local apply_prefix="$1"
+  local control_count="$2"
+  local control_flavor="$3"
+  local build_count="$4"
+  local build_flavor="$5"
+  local gpu_count="$6"
+  local gpu_flavor="$7"
+  local gitlab_count="$8"
+  local gitlab_flavor="$9"
+  local harbor_count="${10}"
+  local harbor_flavor="${11}"
   local host_vcpus host_ram_mb host_disk_avail_gb
   local max_guest_vcpus max_guest_ram_mb max_guest_disk_gb
 
@@ -1626,6 +1627,7 @@ preflight_host_capacity() {
     "$max_guest_vcpus" \
     "$max_guest_ram_mb" \
     "$max_guest_disk_gb" \
+    "$apply_prefix" \
     control "$control_count" "$control_flavor" \
     build "$build_count" "$build_flavor" \
     gpu "$gpu_count" "$gpu_flavor" \
@@ -1635,7 +1637,8 @@ set -euo pipefail
 max_guest_vcpus="$1"
 max_guest_ram_mb="$2"
 max_guest_disk_gb="$3"
-shift 3
+apply_prefix="$4"
+shift 4
 cd /opt/stack/devstack
 set +u
 source openrc admin admin >/dev/null
@@ -1650,7 +1653,11 @@ flavor_value() {
 total_vcpus=0
 total_ram_mb=0
 total_disk_gb=0
+existing_vcpus=0
+existing_ram_mb=0
+existing_disk_gb=0
 summary=()
+existing_summary=()
 while [[ $# -gt 0 ]]; do
   role="$1"
   count="$2"
@@ -1669,13 +1676,54 @@ while [[ $# -gt 0 ]]; do
   summary+=("${role}: count=${count} flavor=${flavor} vcpus=${role_vcpus} ram_mb=${role_ram_mb} disk_gb=${role_disk_gb}")
 done
 
-echo "host capacity requested guests: vcpus=${total_vcpus}/${max_guest_vcpus} ram_mb=${total_ram_mb}/${max_guest_ram_mb} disk_gb=${total_disk_gb}/${max_guest_disk_gb}"
+while IFS=$'\t' read -r name status flavor; do
+  [[ -n "$name" && -n "$flavor" ]] || continue
+  vcpus="$(flavor_value "$flavor" vcpus)"
+  ram_mb="$(flavor_value "$flavor" ram)"
+  disk_gb="$(flavor_value "$flavor" disk)"
+  existing_vcpus=$((existing_vcpus + vcpus))
+  existing_ram_mb=$((existing_ram_mb + ram_mb))
+  existing_disk_gb=$((existing_disk_gb + disk_gb))
+  existing_summary+=("${name}: status=${status} flavor=${flavor} vcpus=${vcpus} ram_mb=${ram_mb} disk_gb=${disk_gb}")
+done < <(
+  openstack server list --all-projects -f json -c Name -c Status -c Flavor \
+    | python3 - "$apply_prefix" <<'PY'
+import json
+import sys
+
+prefix = sys.argv[1]
+servers = json.load(sys.stdin)
+skip_statuses = {"DELETED", "SOFT_DELETED"}
+for server in servers:
+    name = str(server.get("Name") or "")
+    status = str(server.get("Status") or "")
+    flavor = str(server.get("Flavor") or "")
+    if not name or not flavor:
+        continue
+    if name.startswith(prefix):
+        continue
+    if status.upper() in skip_statuses:
+        continue
+    print(f"{name}\t{status}\t{flavor}")
+PY
+)
+
+total_after_vcpus=$((total_vcpus + existing_vcpus))
+total_after_ram_mb=$((total_ram_mb + existing_ram_mb))
+total_after_disk_gb=$((total_disk_gb + existing_disk_gb))
+
+echo "host capacity requested target stack: vcpus=${total_vcpus} ram_mb=${total_ram_mb} disk_gb=${total_disk_gb}"
 printf '  %s\n' "${summary[@]}"
-if (( total_vcpus > max_guest_vcpus || total_ram_mb > max_guest_ram_mb || total_disk_gb > max_guest_disk_gb )); then
+echo "host capacity existing other stacks: vcpus=${existing_vcpus} ram_mb=${existing_ram_mb} disk_gb=${existing_disk_gb}"
+if [[ "${#existing_summary[@]}" -gt 0 ]]; then
+  printf '  %s\n' "${existing_summary[@]}"
+fi
+echo "host capacity total after apply: vcpus=${total_after_vcpus}/${max_guest_vcpus} ram_mb=${total_after_ram_mb}/${max_guest_ram_mb} disk_gb=${total_after_disk_gb}/${max_guest_disk_gb}"
+if (( total_after_vcpus > max_guest_vcpus || total_after_ram_mb > max_guest_ram_mb || total_after_disk_gb > max_guest_disk_gb )); then
   cat >&2 <<EOF
 Host capacity preflight failed.
-Requested VM resources exceed the physical host budget for this local DevStack.
-Lower counts/flavors, or explicitly raise HA_PRIVATE_CLOUD_HOST_MAX_GUEST_* after verifying the host can sustain it.
+Requested VM resources plus existing OpenStack VMs exceed the physical host budget for this local DevStack.
+Destroy another stack, lower counts/flavors, or explicitly raise HA_PRIVATE_CLOUD_HOST_MAX_GUEST_* after verifying the host can sustain it.
 EOF
   exit 1
 fi
@@ -2358,6 +2406,7 @@ terraform_apply() {
   } >zz-local-devstack.auto.tfvars
   cleanup_openstack_orphans_before_apply
   preflight_host_capacity \
+    "${apply_prefix}" \
     "${effective_control_plane_count}" "${effective_control_plane_flavor}" \
     "${effective_build_worker_count}" "${effective_build_worker_flavor}" \
     "${effective_gpu_worker_count}" "${effective_gpu_worker_flavor}" \
