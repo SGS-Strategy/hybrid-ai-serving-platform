@@ -14,7 +14,7 @@ env:
   ARGOCD_REPO_URL: https://github.com/${{ github.repository }}.git
   ARGOCD_TARGET_REVISION: ${{ github.ref_name }}
   SSM_BOOTSTRAP_TAG_KEY: Name
-  SSM_BOOTSTRAP_TAG_VALUE: sgs-hasp-system
+  SSM_BOOTSTRAP_TAG_VALUE: sgs-hasp-general
   SSM_WAIT_ATTEMPTS: 60
   SSM_WAIT_INTERVAL_SECONDS: 10
 
