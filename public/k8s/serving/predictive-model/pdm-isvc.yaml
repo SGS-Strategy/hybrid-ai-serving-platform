@@ -29,13 +29,13 @@ spec:
             value: pdm
         readinessProbe:
           httpGet:
-            path: /ping
+            path: /health
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 10
         livenessProbe:
           httpGet:
-            path: /ping
+            path: /health
             port: 8080
           initialDelaySeconds: 10
           periodSeconds: 20
