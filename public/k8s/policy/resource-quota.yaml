@@ -102,10 +102,10 @@ metadata:
   namespace: logging
 spec:
   hard:
-    requests.cpu: "500m"
-    requests.memory: "1Gi"
-    limits.cpu: "2"
-    limits.memory: "2Gi"
+    requests.cpu: "1"
+    requests.memory: "2Gi"
+    limits.cpu: "4"
+    limits.memory: "4Gi"
     pods: "10"
 ---
 apiVersion: v1
@@ -124,4 +124,4 @@ spec:
         memory: "256Mi"
       max:
         cpu: "1"
-        memory: "1Gi"
+        memory: "2Gi"

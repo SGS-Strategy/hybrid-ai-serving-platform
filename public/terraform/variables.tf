@@ -118,7 +118,9 @@ variable "eks_node_groups" {
     general = {
       # system(ArgoCD, KEDA, cert-manager) + monitoring(Prometheus, Grafana, Loki) + app(dashboard) 통합
       # KEDA(제어부)와 inference(실행부) 장애 전파 격리 목적
-      instance_types = ["m7i-flex.xlarge"] # 4vCPU / 16GB — general 워크로드 전체 수용
+      # ★ 운영 전환 시: m7i-flex.large × 2 (8GB × 2, 비용 동일 + HA 확보)
+      # ★   → instance_types = ["m7i-flex.large"], desired_size = 2, min_size = 2
+      instance_types = ["m7i-flex.xlarge"] # 데모: 4vCPU / 16GB — general 워크로드 전체 수용
       az_count       = 2
       desired_size   = 1
       min_size       = 1
