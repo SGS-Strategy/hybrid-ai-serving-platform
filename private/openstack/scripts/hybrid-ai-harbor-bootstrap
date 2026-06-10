@@ -389,6 +389,91 @@ wait_for_harbor() {
   return 1
 }
 
+harbor_admin_auth_ok() {
+  local admin_password="$1"
+
+  HARBOR_ADMIN_PASSWORD="$admin_password" \
+  HARBOR_HTTP_PORT="${HARBOR_HTTP_PORT:-80}" \
+  python3 - <<'PY'
+import base64
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+
+base_url = f"http://127.0.0.1:{os.environ.get('HARBOR_HTTP_PORT', '80')}/api/v2.0"
+admin_password = os.environ["HARBOR_ADMIN_PASSWORD"]
+auth = base64.b64encode(f"admin:{admin_password}".encode("utf-8")).decode("ascii")
+
+for _ in range(12):
+    req = urllib.request.Request(
+        f"{base_url}/users/current",
+        headers={"Authorization": f"Basic {auth}", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            if response.status == 200:
+                raise SystemExit(0)
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403):
+            raise SystemExit(1)
+    except Exception:
+        pass
+    time.sleep(5)
+
+raise SystemExit(1)
+PY
+}
+
+reset_harbor_admin_password() {
+  local admin_password
+  admin_password="$(cat "$admin_password_file")"
+
+  HARBOR_ADMIN_PASSWORD="$admin_password" python3 - <<'PY' \
+    | docker exec -i harbor-db psql -U postgres -d registry -v ON_ERROR_STOP=1 >/dev/null
+import hashlib
+import os
+import secrets
+import string
+
+password = os.environ["HARBOR_ADMIN_PASSWORD"]
+alphabet = string.ascii_letters + string.digits
+salt = "".join(secrets.choice(alphabet) for _ in range(32))
+digest = hashlib.pbkdf2_hmac(
+    "sha256",
+    password.encode("utf-8"),
+    salt.encode("utf-8"),
+    4096,
+    dklen=16,
+).hex()
+print(
+    "UPDATE harbor_user "
+    f"SET password = '{digest}', salt = '{salt}', password_version = 'sha256', update_time = NOW() "
+    "WHERE username = 'admin';"
+)
+PY
+}
+
+ensure_harbor_admin_password() {
+  local admin_password
+  admin_password="$(cat "$admin_password_file")"
+
+  if harbor_admin_auth_ok "$admin_password"; then
+    return 0
+  fi
+
+  echo "Harbor admin API auth failed with configured password; resetting admin password in database" >&2
+  reset_harbor_admin_password
+  if harbor_admin_auth_ok "$admin_password"; then
+    return 0
+  fi
+
+  docker restart harbor-core >/dev/null 2>&1 || true
+  sleep 10
+  harbor_admin_auth_ok "$admin_password"
+}
+
 provision_api_resources() {
   local admin_password
   admin_password="$(cat "$admin_password_file")"
@@ -570,6 +655,7 @@ main() {
   write_harbor_config "$release_tag"
   install_harbor
   wait_for_harbor
+  ensure_harbor_admin_password
   provision_api_resources
 }
 

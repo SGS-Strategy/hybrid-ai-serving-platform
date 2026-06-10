@@ -155,6 +155,7 @@ GITLAB_EXTERNAL_URL="${GITLAB_EXTERNAL_URL:-https://${GITLAB_DOMAIN}}"
 GITLAB_IMAGE="${GITLAB_IMAGE:-${TF_VAR_gitlab_container_image}}"
 GITLAB_SIGNUP_ENABLED="${GITLAB_SIGNUP_ENABLED:-false}"
 GITLAB_ADMIN_USERNAME="${GITLAB_ADMIN_USERNAME:-root}"
+GITLAB_ROOT_PASSWORD="${GITLAB_ROOT_PASSWORD:-}"
 GITLAB_GPU_RUNNER_NAME_PREFIX="${GITLAB_GPU_RUNNER_NAME_PREFIX:-hybrid-ai-gpu}"
 GITLAB_GPU_RUNNER_TAGS="${GITLAB_GPU_RUNNER_TAGS:-gpu-worker}"
 GITLAB_UPSTREAM_PORT="${GITLAB_UPSTREAM_PORT:-18083}"
@@ -2850,7 +2851,7 @@ VALUES
 
 setup_gitlab() {
   [[ "${GITLAB_INSTALL_ENABLED}" == "true" ]] || return 0
-  local target registry_host
+  local target registry_host gitlab_root_password_file
   write_ssh_config
   target="$(first_gitlab_ip)"
   [[ -n "${target}" ]] || return 0
@@ -2869,6 +2870,15 @@ setup_gitlab() {
   ssh -F "${SSH_CONFIG}" "${target}" \
     "sudo install -m 0755 -o root -g root /dev/stdin /usr/local/sbin/hybrid-ai-gitlab-bootstrap" \
     <"${ROOT}/private/openstack/scripts/hybrid-ai-gitlab-bootstrap"
+
+  gitlab_root_password_file=""
+  if [[ -n "${GITLAB_ROOT_PASSWORD}" ]]; then
+    gitlab_root_password_file="/tmp/gitlab-root-password-${RUN_ID}"
+    printf '%s' "${GITLAB_ROOT_PASSWORD}" | ssh -F "${SSH_CONFIG}" "${target}" "umask 077 && cat > ${gitlab_root_password_file}"
+  elif [[ "${GITLAB_ADMIN_USERNAME}" != "root" ]]; then
+    log "warning: GITLAB_ROOT_PASSWORD is not set; GitLab admin user ${GITLAB_ADMIN_USERNAME} cannot be provisioned until a password file exists on the VM"
+  fi
+
   ssh -F "${SSH_CONFIG}" "${target}" bash -s -- \
     "${GITLAB_EXTERNAL_URL}" \
     "${GITLAB_DOMAIN}" \
@@ -2886,7 +2896,8 @@ setup_gitlab() {
     "${GITLAB_DOCKER_BLKIO_WEIGHT}" \
     "${GITLAB_RECREATE_FOR_IO_PROFILE}" \
     "${GITLAB_DOCKER_LOG_MAX_SIZE}" \
-    "${GITLAB_DOCKER_LOG_MAX_FILE}" <<'REMOTE'
+    "${GITLAB_DOCKER_LOG_MAX_FILE}" \
+    "${gitlab_root_password_file}" <<'REMOTE'
 set -euo pipefail
 external_url="$1"
 gitlab_domain="$2"
@@ -2905,8 +2916,22 @@ gitlab_docker_blkio_weight="${14:-300}"
 gitlab_recreate_for_io_profile="${15:-true}"
 gitlab_docker_log_max_size="${16:-10m}"
 gitlab_docker_log_max_file="${17:-3}"
+gitlab_root_password_file="${18:-}"
+cleanup() {
+  if [[ -n "$gitlab_root_password_file" ]]; then
+    sudo rm -f "$gitlab_root_password_file" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
 sudo install -d -m 0700 /etc/hybrid-ai
 sudo install -d -m 0755 /usr/local/sbin /var/lib/hybrid-ai/gitlab-bootstrap /var/cache/hybrid-ai/container-images
+installed_root_password_file=""
+if [[ -n "$gitlab_root_password_file" && -s "$gitlab_root_password_file" ]]; then
+  installed_root_password_file="/etc/hybrid-ai/gitlab-root-password"
+  sudo install -m 0600 -o root -g root "$gitlab_root_password_file" "$installed_root_password_file"
+elif [[ -s /etc/hybrid-ai/gitlab-root-password ]]; then
+  installed_root_password_file="/etc/hybrid-ai/gitlab-root-password"
+fi
 env_file_tmp="$(mktemp)"
 write_env_line() {
   local name="$1" value="$2"
@@ -2920,7 +2945,7 @@ write_env_line GITLAB_IMAGE "$gitlab_image"
 write_env_line GITLAB_IMAGE_ARCHIVE_FILE ""
 write_env_line GITLAB_SIGNUP_ENABLED "$gitlab_signup_enabled"
 write_env_line GITLAB_ADMIN_USERNAME "$gitlab_admin_username"
-write_env_line GITLAB_ROOT_PASSWORD_FILE /etc/hybrid-ai/gitlab-root-password
+write_env_line GITLAB_ROOT_PASSWORD_FILE "$installed_root_password_file"
 write_env_line GITLAB_GPU_RUNNER_NAME_PREFIX "$runner_name_prefix"
 write_env_line GITLAB_GPU_RUNNER_TAGS "$runner_tags"
 write_env_line GITLAB_BOOTSTRAP_WAIT_SECONDS "$gitlab_bootstrap_wait_seconds"
