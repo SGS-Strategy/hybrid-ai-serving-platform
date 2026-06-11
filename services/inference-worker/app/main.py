@@ -91,6 +91,7 @@ def _alert_state_table_name() -> str:
     return os.getenv("ALERT_STATE_TABLE_NAME", "sgs-hasp-equipment-alert-state")
 
 
+# 고객사 알림 이메일 설정 (AWS SES)
 def _ses_sender_email() -> str:
     return os.getenv("SES_SENDER_EMAIL", "")
 
@@ -112,7 +113,7 @@ def _create_alert_state_table():
 
 
 def _is_abnormal(prediction: str) -> bool:
-    return prediction.lower() not in ("normal", "정상")
+    return prediction.lower() != "normal"
 
 
 def _send_alert_email(equipment_id: str, prediction: str, completed_at: int) -> None:

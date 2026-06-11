@@ -2,23 +2,28 @@ import { useEffect, useState, useCallback } from "react";
 
 const API_BASE = "/api";
 
-function Clock() {
-  const [time, setTime] = useState("");
-  useEffect(() => {
-    const tick = () =>
-      setTime(new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) + " KST");
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, []);
-  return <span className="clock">{time}</span>;
+function LastUpdated({ time }) {
+  if (!time) return <span className="clock">-</span>;
+  return (
+    <span className="clock">
+      마지막 업데이트: {new Date(time).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}
+    </span>
+  );
 }
 
+const PREDICTION_LABEL = {
+  normal: "정상상태",
+  type1: "질량불균형 고장상태",
+  type2: "지지불량 고장상태",
+  type3: "질량불균형과 지지불량 고장상태",
+};
+
 function Badge({ value }) {
-  const isNormal = value === "정상" || value?.toLowerCase() === "normal";
+  const isNormal = value?.toLowerCase() === "normal";
+  const label = PREDICTION_LABEL[value?.toLowerCase()] ?? value ?? "-";
   return (
     <span className={`badge ${isNormal ? "badge-normal" : "badge-abnormal"}`}>
-      {value ?? "-"}
+      {label}
     </span>
   );
 }
@@ -37,7 +42,7 @@ function formatLatency(requestedAt, completedAt) {
 function SummaryCards({ results }) {
   const total = results.length;
   const abnormal = results.filter(
-    (r) => r.prediction !== "정상" && r.prediction?.toLowerCase() !== "normal"
+    (r) => r.prediction?.toLowerCase() !== "normal"
   ).length;
   const normal = total - abnormal;
   const normalRate = total === 0 ? "-" : `${((normal / total) * 100).toFixed(1)}%`;
@@ -71,6 +76,7 @@ export default function App() {
   const [filter, setFilter]         = useState("");
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
 
   const fetchEquipments = useCallback(async () => {
     try {
@@ -93,6 +99,7 @@ export default function App() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setResults(data.results ?? []);
+      setLastUpdated(Date.now());
     } catch (e) {
       setError("데이터를 불러오지 못했습니다.");
     } finally {
@@ -164,7 +171,7 @@ export default function App() {
 
       <header>
         <h1><span>HASP</span> 예지보전 모니터링 대시보드</h1>
-        <Clock />
+        <LastUpdated time={lastUpdated} />
       </header>
 
       <main>
@@ -190,28 +197,26 @@ export default function App() {
           <table>
             <thead>
               <tr>
-                <th>완료 시각</th>
+                <th>감지 시각</th>
+                <th>공장 ID</th>
                 <th>장비 ID</th>
                 <th>예측 결과</th>
-                <th>소요 시간</th>
-                <th>요청 ID</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={5} className="loading">불러오는 중...</td></tr>
+                <tr><td colSpan={4} className="loading">불러오는 중...</td></tr>
               ) : error ? (
-                <tr><td colSpan={5} className="error">{error}</td></tr>
+                <tr><td colSpan={4} className="error">{error}</td></tr>
               ) : results.length === 0 ? (
-                <tr><td colSpan={5} className="empty">추론 결과가 없습니다.</td></tr>
+                <tr><td colSpan={4} className="empty">추론 결과가 없습니다.</td></tr>
               ) : (
                 results.map((r) => (
                   <tr key={r.request_id}>
                     <td>{formatTime(r.completed_at)}</td>
+                    <td>{r.factory_id ?? "-"}</td>
                     <td>{r.equipment_id ?? "-"}</td>
                     <td><Badge value={r.prediction} /></td>
-                    <td>{formatLatency(r.requested_at, r.completed_at)}</td>
-                    <td style={{ color: "var(--muted)", fontSize: "0.7rem" }}>{r.request_id}</td>
                   </tr>
                 ))
               )}
