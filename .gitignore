@@ -1,1 +1,4 @@
-*.csv
+model.pt
+scaler.pkl
+handler.py
+Dockerfile.build
