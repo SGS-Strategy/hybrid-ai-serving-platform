@@ -1,8 +1,20 @@
+resource "kubernetes_namespace" "inference" {
+  metadata {
+    name = "inference"
+  }
+  # lifecycle ignore_changes로 ArgoCD가 추가하는 finalizer 무시 → destroy 시 타임아웃 방지
+  lifecycle {
+    ignore_changes = [metadata[0].finalizers]
+  }
+}
+
 resource "kubernetes_config_map" "inference_config" {
   metadata {
     name      = "inference-config"
-    namespace = "inference"
+    namespace = kubernetes_namespace.inference.metadata[0].name
   }
+
+  depends_on = [kubernetes_namespace.inference]
 
   data = {
     BOOTSTRAP_SERVERS = data.terraform_remote_state.platform.outputs.msk_bootstrap_brokers
