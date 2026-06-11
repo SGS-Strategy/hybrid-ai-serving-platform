@@ -525,7 +525,7 @@ jobs:
       - name: Terraform destroy plan
         if: ${{ inputs.action == 'destroy' }}
         working-directory: public/terraform
-        run: terraform plan -destroy -out=tfdestroy
+        run: terraform plan -destroy -refresh=false -out=tfdestroy
 
       - name: Upload destroy plan artifact
         if: ${{ inputs.action == 'destroy' }}
