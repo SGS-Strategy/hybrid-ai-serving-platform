@@ -221,10 +221,11 @@ variable "ses_alert_sender_email" {
   default     = "pswk0907@gmail.com"
 }
 
+# 실제 고객사 이메일로 교체
 variable "ses_alert_recipient_email" {
   description = "이상 감지 알림 수신자 이메일 (고객사 담당자)"
   type        = string
-  default     = "pswk0907@gmail.com"  # 실제 고객사 이메일로 교체
+  default     = "pswk0907@gmail.com"
 }
 
 # VPN 변수
