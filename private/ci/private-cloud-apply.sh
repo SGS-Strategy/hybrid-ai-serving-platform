@@ -219,6 +219,8 @@ ARGO_WORKFLOWS_INSTALL_MANIFEST="${ARGO_WORKFLOWS_INSTALL_MANIFEST:-https://gith
 MINIO_VOLUME_SIZE="${MINIO_VOLUME_SIZE:-10}"
 MINIO_ROOT_USER="${MINIO_ROOT_USER:-3stacks}"
 MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-}"
+MINIO_CONSOLE_USER="${MINIO_CONSOLE_USER:-model-admin}"
+MINIO_CONSOLE_PASSWORD="${MINIO_CONSOLE_PASSWORD:-}"
 HA_KUBECTL_TUNNEL_PORT="${HA_KUBECTL_TUNNEL_PORT:-16443}"
 SSH_KEY="${ROOT}/.ha/ssh/hybrid-ai-private-admin"
 SSH_CONFIG="${ROOT}/.ha/openstack/ssh_config"
@@ -3369,11 +3371,14 @@ VALUES
   helm upgrade --install minio-operator minio-operator/operator \
     --namespace minio-operator --create-namespace --version 7.1.1 \
     --values "${values_file}" --wait --timeout 10m
+  kubectl -n minio-operator patch deployment minio-operator --type=merge -p '{"spec":{"template":{"spec":{"dnsConfig":{"options":[{"name":"ndots","value":"1"}]}}}}}'
   kubectl wait --for=condition=Established crd/tenants.minio.min.io --timeout=300s
   kubectl -n minio-operator rollout status deployment/minio-operator --timeout=600s
   kubectl create namespace minio-tenant --dry-run=client -o yaml | kubectl apply -f -
   existing_minio_root_user="$(kubectl -n minio-tenant get secret minio-creds-secret -o jsonpath='{.data.accessKey}' 2>/dev/null | base64 -d 2>/dev/null || true)"
   existing_minio_root_password="$(kubectl -n minio-tenant get secret minio-creds-secret -o jsonpath='{.data.secretKey}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  existing_minio_console_user="$(kubectl -n minio-tenant get secret model-admin -o jsonpath='{.data.CONSOLE_ACCESS_KEY}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  existing_minio_console_password="$(kubectl -n minio-tenant get secret model-admin -o jsonpath='{.data.CONSOLE_SECRET_KEY}' 2>/dev/null | base64 -d 2>/dev/null || true)"
   minio_root_user="${MINIO_ROOT_USER:-${existing_minio_root_user:-3stacks}}"
   minio_root_password="${MINIO_ROOT_PASSWORD:-${existing_minio_root_password:-}}"
   if [[ -z "${minio_root_password}" ]]; then
@@ -3386,12 +3391,33 @@ print(secrets.token_urlsafe(36))
 PY
 )"
   fi
-  printf -v minio_config_env '%s\n%s\n%s' \
+  minio_console_user="${MINIO_CONSOLE_USER:-${existing_minio_console_user:-model-admin}}"
+  minio_console_password="${MINIO_CONSOLE_PASSWORD:-${existing_minio_console_password:-}}"
+  if [[ "${minio_console_user}" == "${minio_root_user}" ]]; then
+    log "warning: MinIO console user matched root user; using model-admin to satisfy MinIO tenant user constraints"
+    minio_console_user="model-admin"
+    if [[ -z "${MINIO_CONSOLE_PASSWORD}" || "${minio_console_password}" == "${minio_root_password}" ]]; then
+      minio_console_password=""
+    fi
+  fi
+  if [[ -z "${minio_console_password}" || "${minio_console_password}" == "${minio_root_password}" ]]; then
+    if [[ -z "${MINIO_CONSOLE_PASSWORD}" ]]; then
+      log "warning: MINIO_CONSOLE_PASSWORD is not set or matches root; generating a separate console password"
+    fi
+    minio_console_password="$(python3 - <<'PY'
+import secrets
+print(secrets.token_hex(32))
+PY
+)"
+  fi
+  printf -v minio_config_env '%s\n%s\n%s\n%s\n%s' \
     "export MINIO_ROOT_USER=\"${minio_root_user}\"" \
     "export MINIO_ROOT_PASSWORD=\"${minio_root_password}\"" \
-    'export MINIO_BROWSER="on"'
+    'export MINIO_BROWSER="on"' \
+    'export MINIO_SERVER_URL="http://127.0.0.1:9000"' \
+    "export MINIO_BROWSER_REDIRECT_URL=\"https://${MINIO_CONSOLE_DOMAIN}\""
   kubectl -n minio-tenant create secret generic minio-creds-secret --from-literal=accessKey="${minio_root_user}" --from-literal=secretKey="${minio_root_password}" --dry-run=client -o yaml | kubectl apply -f -
-  kubectl -n minio-tenant create secret generic model-admin --from-literal=CONSOLE_ACCESS_KEY="${minio_root_user}" --from-literal=CONSOLE_SECRET_KEY="${minio_root_password}" --dry-run=client -o yaml | kubectl apply -f -
+  kubectl -n minio-tenant create secret generic model-admin --from-literal=CONSOLE_ACCESS_KEY="${minio_console_user}" --from-literal=CONSOLE_SECRET_KEY="${minio_console_password}" --dry-run=client -o yaml | kubectl apply -f -
   kubectl -n minio-tenant create secret generic minio-configuration --from-literal=config.env="${minio_config_env}" --dry-run=client -o yaml | kubectl apply -f -
   sed -E "s/storage: [0-9]+Gi/storage: ${MINIO_VOLUME_SIZE}Gi/g" "${ROOT}/private/storage/minio-tenant.yaml" | kubectl apply -f -
   for _ in {1..60}; do

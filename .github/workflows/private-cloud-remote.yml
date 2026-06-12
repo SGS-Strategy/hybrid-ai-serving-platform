@@ -234,6 +234,8 @@ jobs:
           write_env HARBOR_ADMIN_PASSWORD "$HARBOR_ADMIN_PASSWORD"
           write_env MINIO_ROOT_USER "$MINIO_ROOT_USER"
           write_env MINIO_ROOT_PASSWORD "$MINIO_ROOT_PASSWORD"
+          write_env MINIO_CONSOLE_USER "$MINIO_CONSOLE_USER"
+          write_env MINIO_CONSOLE_PASSWORD "$MINIO_CONSOLE_PASSWORD"
           write_env MINIO_DOMAIN "$MINIO_DOMAIN"
           write_env MINIO_CONSOLE_DOMAIN "$MINIO_CONSOLE_DOMAIN"
           write_env MINIO_API_NODEPORT "$MINIO_API_NODEPORT"
@@ -334,6 +336,8 @@ jobs:
           HARBOR_ADMIN_PASSWORD: ${{ secrets.HARBOR_ADMIN_PASSWORD }}
           MINIO_ROOT_USER: ${{ vars.MINIO_ROOT_USER || '3stacks' }}
           MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD }}
+          MINIO_CONSOLE_USER: ${{ vars.MINIO_CONSOLE_USER || 'model-admin' }}
+          MINIO_CONSOLE_PASSWORD: ${{ secrets.MINIO_CONSOLE_PASSWORD }}
           MINIO_DOMAIN: ${{ vars.MINIO_DOMAIN || '' }}
           MINIO_CONSOLE_DOMAIN: ${{ vars.MINIO_CONSOLE_DOMAIN || '' }}
           MINIO_API_NODEPORT: ${{ vars.MINIO_API_NODEPORT || '30900' }}
