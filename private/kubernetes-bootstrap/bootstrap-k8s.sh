@@ -812,11 +812,9 @@ wait_for_kubernetes_api() {
   ssh_node "$host" 'sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get --raw=/readyz >/dev/null'
 }
 
-#feature/hybrid
+#feature/hybrid# ==============================================================================
+#   GitLab Runner 주입 엔진 (수동 성공 수순과 100% 동일하게 일치화 완료)
 # ==============================================================================
-#   GitLab Runner 주입 엔진
-# ==============================================================================
-# private/kubernetes-bootstrap/bootstrap-k8s.sh 내부의 함수 정의부 최종 반영본 (Harbor 사설 프록시 복구 버전)
 install_gitlab_runner_automation() {
   local master_host="$1"
 
@@ -863,8 +861,15 @@ helm repo update >/dev/null
 # 3. 팀 아키텍처 규칙에 따른 모델 빌드 격리 방(Namespace) 선행 생성
 sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf create namespace model-build --dry-run=client -o yaml | sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f -
 
+# 4. 사설 인증서 가로채서 K8s Secret으로 자동 구워내기 (수동 성공 수순과 100% 동일하게 일치화)
+openssl s_client -showcerts -connect gitlab.intp.me:443 </dev/null 2>/dev/null | openssl x509 -outform PEM > gitlab.intp.me.crt
+sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf -n model-build create secret generic gitlab-runner-certs \
+  --from-file=gitlab.intp.me.crt=gitlab.intp.me.crt \
+  --dry-run=client -o yaml | sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f -
+rm -f gitlab.intp.me.crt
+
 echo "Deploying GitLab Runner with Private Harbor Cache configurations..."
-#  이미지 주소를 사내 Harbor 사설 프록시 대역(harbor.intp.me/docker-hub/gitlab/...)으로 재지정하여 배포하는 헬름 차트 명령어
+# 이미지 주소를 사내 Harbor 사설 프록시 대역(harbor.intp.me/docker-hub/gitlab/...)으로 원상 복구 및 설정 자동화
 sudo helm --kubeconfig=/etc/kubernetes/admin.conf upgrade --install gitlab-runner gitlab/gitlab-runner \
   --namespace model-build \
   --set gitlabUrl="${gl_url}" \
@@ -873,6 +878,7 @@ sudo helm --kubeconfig=/etc/kubernetes/admin.conf upgrade --install gitlab-runne
   --set image.registry="harbor.intp.me" \
   --set image.image="docker-hub/gitlab/gitlab-runner" \
   --set runners.helpers.image="harbor.intp.me/docker-hub/gitlab/gitlab-runner-helper" \
+  --set certsSecretName="gitlab-runner-certs" \
   --set-json "hostAliases=[{\"ip\":\"${gl_ip}\",\"hostnames\":[\"gitlab.intp.me\"]}]" \
   --set-json 'envVars=[{"name":"GITLAB_RUNNER_DISABLE_SSL_VERIFICATION","value":"true"}]' \
   --set runners.config="[[runners]]
