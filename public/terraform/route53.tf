@@ -19,16 +19,12 @@ resource "aws_route53_zone" "private" {
 resource "aws_route53_record" "dashboard_private" {
   zone_id = aws_route53_zone.private.zone_id
   name    = "dashboard.sgs-hasp.click"
-  type    = "A"
-
-  alias {
-    name                   = "placeholder.elb.amazonaws.com"
-    zone_id                = "ZWKZPGTI48KDX"
-    evaluate_target_health = true
-  }
+  type    = "CNAME"
+  ttl     = 60
+  records = ["placeholder.internal"]
 
   lifecycle {
-    ignore_changes = [alias]
+    ignore_changes = [records]
   }
 }
 
@@ -36,16 +32,12 @@ resource "aws_route53_record" "dashboard_private" {
 resource "aws_route53_record" "api_private" {
   zone_id = aws_route53_zone.private.zone_id
   name    = "api.sgs-hasp.click"
-  type    = "A"
-
-  alias {
-    name                   = "placeholder.elb.amazonaws.com"
-    zone_id                = "ZWKZPGTI48KDX"
-    evaluate_target_health = true
-  }
+  type    = "CNAME"
+  ttl     = 60
+  records = ["placeholder.internal"]
 
   lifecycle {
-    ignore_changes = [alias]
+    ignore_changes = [records]
   }
 }
 
