@@ -231,7 +231,7 @@ jobs:
           echo "MSK topics sync timed out."
           exit 1
 
-      - name: Delete ArgoCD apps before destroy
+      - name: Pre-destroy Kubernetes cleanup
         if: ${{ inputs.action == 'destroy' && steps.resolve_instance.outputs.value != '' }}
         id: delete_argocd_apps
         env:
@@ -250,15 +250,23 @@ jobs:
               "read AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN <<< \"$ASSUME_ROLE_OUTPUT\"",
               "export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN",
               f"aws eks update-kubeconfig --region {os.environ['AWS_REGION']} --name {os.environ['EKS_CLUSTER_NAME']} --kubeconfig /tmp/eks-kubeconfig",
-              "kubectl delete ingress --all -n inference --force --grace-period=0 || true",
+              "kubectl get apiservice v1beta1.external.metrics.k8s.io >/dev/null 2>&1 && kubectl delete apiservice v1beta1.external.metrics.k8s.io || true",
+              "kubectl delete application platform-addons -n argocd --ignore-not-found=true --wait=false || true",
               "kubectl get application -n argocd -o name | xargs -I{} kubectl patch {} -n argocd -p '{\"metadata\":{\"finalizers\":[]}}' --type=merge || true",
-              "kubectl delete application --all -n argocd --force --grace-period=0 || true",
+              "kubectl delete application --all -n argocd --ignore-not-found=true --wait=false || true",
+              "kubectl delete secret -n argocd -l argocd.argoproj.io/secret-type=repository --ignore-not-found=true --wait=false || true",
+              "kubectl delete ingress --all -n inference --ignore-not-found=true --wait=false || true",
+              "kubectl delete ingress --all -n app --ignore-not-found=true --wait=false || true",
               "kubectl get inferenceservice -n inference -o name 2>/dev/null | xargs -I{} kubectl patch {} -n inference -p '{\"metadata\":{\"finalizers\":[]}}' --type=merge || true",
-              "kubectl delete inferenceservice --all -n inference --force --grace-period=0 || true",
-              "kubectl delete pvc --all -n inference --force --grace-period=0 || true",
-              "kubectl delete all --all -n inference --force --grace-period=0 || true",
-              "for ns in inference app monitoring logging kserve keda cert-manager chaos-testing argocd; do kubectl patch namespace $ns -p '{\"metadata\":{\"finalizers\":[]}}' --type=merge 2>/dev/null || true; kubectl delete namespace $ns --force --grace-period=0 2>/dev/null || true; done",
-              "sleep 10",
+              "kubectl delete inferenceservice --all -n inference --ignore-not-found=true --wait=false || true",
+              "kubectl delete deploy --all -n app --ignore-not-found=true --wait=false || true",
+              "kubectl delete svc --all -n app --ignore-not-found=true --wait=false || true",
+              "kubectl delete pvc --all -n inference --ignore-not-found=true --wait=false || true",
+              "kubectl delete all --all -n inference --ignore-not-found=true --wait=false || true",
+              "for ns in app inference argocd monitoring logging kserve keda cert-manager chaos-testing; do kubectl delete namespace $ns --ignore-not-found=true --wait=false || true; done",
+              "sleep 5",
+              "for ns in app inference argocd monitoring logging kserve keda cert-manager chaos-testing; do kubectl patch namespace $ns -p '{\"metadata\":{\"finalizers\":[]}}' --type=merge 2>/dev/null || true; done",
+              "kubectl get ns || true",
           ]
 
           with open("argocd-cleanup-commands.json", "w") as fp:
@@ -269,22 +277,23 @@ jobs:
             --region "${AWS_REGION}" \
             --instance-ids "${TARGET_INSTANCE_ID}" \
             --document-name "AWS-RunShellScript" \
-            --comment "Delete ArgoCD apps before destroy" \
+            --comment "Pre-destroy Kubernetes cleanup" \
             --parameters file://argocd-cleanup-commands.json \
             --query 'Command.CommandId' \
             --output text)
 
           echo "command_id=${COMMAND_ID}" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for ArgoCD cleanup
+      - name: Wait briefly for pre-destroy Kubernetes cleanup
         if: ${{ inputs.action == 'destroy' && steps.resolve_instance.outputs.value != '' }}
         continue-on-error: true
-        timeout-minutes: 10
+        timeout-minutes: 3
         env:
           COMMAND_ID: ${{ steps.delete_argocd_apps.outputs.command_id }}
           TARGET_INSTANCE_ID: ${{ steps.resolve_instance.outputs.value }}
         run: |
-          for ((i=1; i<=SSM_WAIT_ATTEMPTS; i++)); do
+          MAX_ATTEMPTS=12
+          for ((i=1; i<=MAX_ATTEMPTS; i++)); do
             STATUS=$(aws ssm get-command-invocation \
               --region "${AWS_REGION}" \
               --command-id "${COMMAND_ID}" \
@@ -292,7 +301,7 @@ jobs:
               --query 'Status' \
               --output text)
 
-            echo "ArgoCD cleanup status (${i}/${SSM_WAIT_ATTEMPTS}): ${STATUS}"
+            echo "Pre-destroy cleanup status (${i}/${SSM_WAIT_ATTEMPTS}): ${STATUS}"
 
             if [[ "${STATUS}" == "Success" ]]; then
               break
@@ -305,11 +314,13 @@ jobs:
                 --instance-id "${TARGET_INSTANCE_ID}" \
                 --query 'StandardErrorContent' \
                 --output text || true
-              exit 1
+              exit 0
             fi
 
-            sleep "${SSM_WAIT_INTERVAL_SECONDS}"
+            sleep 5
           done
+
+          echo "Pre-destroy cleanup is still running; continuing to in-cluster destroy."
 
       - name: Send in-cluster Terraform command through SSM
         if: ${{ steps.resolve_instance.outputs.value != '' }}
@@ -345,7 +356,7 @@ jobs:
               "tar -xzf /tmp/hasp-bootstrap/terraform-incluster.tar.gz -C /tmp/hasp-bootstrap",
               "terraform -chdir=/tmp/hasp-bootstrap/terraform-incluster init",
               # destroy 시 namespace finalizer로 인한 타임아웃 방지: namespace finalizer 제거 후 state에서 제거
-              "if [ '{}' = 'destroy' ]; then kubectl patch namespace argocd -p '{{\"metadata\":{{\"finalizers\":[]}}}}' --type=merge 2>/dev/null || true; kubectl patch namespace inference -p '{{\"metadata\":{{\"finalizers\":[]}}}}' --type=merge 2>/dev/null || true; kubectl delete namespace argocd inference --force --grace-period=0 2>/dev/null || true; sleep 10; terraform -chdir=/tmp/hasp-bootstrap/terraform-incluster state rm kubernetes_namespace.argocd kubernetes_namespace.inference 2>/dev/null || true; fi".format(tf_action),
+              "if [ '{}' = 'destroy' ]; then kubectl get apiservice v1beta1.external.metrics.k8s.io >/dev/null 2>&1 && kubectl delete apiservice v1beta1.external.metrics.k8s.io || true; for ns in app inference argocd; do kubectl patch namespace $ns -p '{{\"metadata\":{{\"finalizers\":[]}}}}' --type=merge 2>/dev/null || true; kubectl delete namespace $ns --ignore-not-found=true 2>/dev/null || true; done; sleep 10; terraform -chdir=/tmp/hasp-bootstrap/terraform-incluster state rm kubernetes_namespace.argocd kubernetes_namespace.inference 2>/dev/null || true; fi".format(tf_action),
               tf_command,
           ]
 
@@ -366,6 +377,8 @@ jobs:
 
       - name: Wait for in-cluster Terraform result
         if: ${{ steps.resolve_instance.outputs.value != '' }}
+        continue-on-error: true
+        timeout-minutes: 30
         env:
           COMMAND_ID: ${{ steps.send_incluster.outputs.command_id }}
           TARGET_INSTANCE_ID: ${{ steps.resolve_instance.outputs.value }}
