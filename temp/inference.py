@@ -35,10 +35,21 @@ class KAMP_DNN(nn.Module):
 model = None
 scaler = None
 
+# [핵심 수정] 서버 기동 및 종료 시 자산 관리 레이어
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global model, scaler
-    model = torch.load(PATH + 'model.pt', weights_only=False)
+    
+    # 1. 빈 네트워크 구조(뼈대)를 메모리에 먼저 생성
+    model = KAMP_DNN()
+    
+    # 2. 빌드된 가중치(State Dict) 파일 레이어 로드 (AttributeError 원천 차단)
+    state_dict = torch.load(PATH + 'model_weights.pt', map_location=torch.device('cpu'), weights_only=True)
+    
+    # 3. 뼈대에 가중치 데이터 주입
+    model.load_state_dict(state_dict)
+    
+    # 4. 스케일러 로드 및 모델을 추론 전용(Evaluation) 모드로 고정
     scaler = joblib.load(PATH + 'scaler.pkl')
     model.eval()
     yield
