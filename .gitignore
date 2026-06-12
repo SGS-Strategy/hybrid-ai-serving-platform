@@ -29,3 +29,4 @@ monitoring.yml
 # Local reverse proxy runtime overrides.
 **/Caddyfile.local
 **/caddy.env
+hybrid-ai-private-admin

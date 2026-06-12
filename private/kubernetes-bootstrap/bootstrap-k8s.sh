@@ -812,6 +812,65 @@ wait_for_kubernetes_api() {
   ssh_node "$host" 'sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get --raw=/readyz >/dev/null'
 }
 
+#feature/hybrid
+# ==============================================================================
+#   GitLab Runner 주입 엔진
+# ==============================================================================
+# private/kubernetes-bootstrap/bootstrap-k8s.sh 내부의 함수 정의부 수정
+install_gitlab_runner_automation() {
+  local master_host="$1"
+  
+  info "--------------------------------------------------------"
+  info "Fox: GitLab Runner 무인 배포 및 사설 인프라 연동 자동화를 가동"
+  info "--------------------------------------------------------"
+  
+  local target_gitlab_url="${GITLAB_URL:-https://gitlab.internal.intp.me}"
+  local target_gitlab_token="${GITLAB_TOKEN:-GLRT-PLACEHOLDER-TOKEN}"
+  
+  info "  Target 사설 GitLab 엔드포인트: ${target_gitlab_url}"
+
+  ssh_node "$master_host" bash -s -- "$target_gitlab_url" "$target_gitlab_token" <<'REMOTE'
+set -euo pipefail
+gl_url="$1"
+gl_token="$2"
+
+if ! command -v helm >/dev/null 2>&1; then
+  echo "Installing Helm v3 on master node..."
+  curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+fi
+
+helm repo add gitlab https://charts.gitlab.io --force-update >/dev/null
+helm repo update >/dev/null
+
+sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf create namespace model-build --dry-run=client -o yaml | sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f -
+
+# private/kubernetes-bootstrap/bootstrap-k8s.sh 내부의 함수 정의부 중 일부 수정
+
+echo "Deploying GitLab Runner with Private Harbor Cache configurations..."
+helm upgrade --install gitlab-runner gitlab/gitlab-runner \
+  --namespace model-build \
+  --set gitlabUrl="${gl_url}" \
+  --set runnerRegistrationToken="${gl_token}" \
+  --set runners.tags="model-build" \
+  --set image.registry="harbor.intp.me" \
+  --set image.image="docker-hub/library/gitlab-runner" \
+  --set runners.helpers.image="harbor.intp.me/docker-hub/gitlab/gitlab-runner-helper" \
+  --set runners.config="[[runners]]
+    name = \"private-build-worker-k8s-runner\"
+    executor = \"kubernetes\"
+    [runners.kubernetes]
+      namespace = \"model-build\"
+      image = \"harbor.intp.me/docker-hub/library/ubuntu:22.04\"
+      privileged = true
+      [[runners.kubernetes.volumes.pvc]]
+        name = \"build-cache\"
+        claim_name = \"model-build-cache\"
+        mount_path = \"/cache\""
+
+echo "🎉 GitLab Runner 배포 신호 전송 완료 : 삼겹살을 위대하게!"
+REMOTE
+}
+
 main() {
   local first_index
   local server_private_ip
@@ -898,6 +957,8 @@ main() {
 
   wait_for_kubernetes "$server_target_ip"
   label_nodes "$server_target_ip"
+  #feature/hybrid 
+  install_gitlab_runner_automation "$server_target_ip"
   write_kubeconfig "$server_target_ip" "$api_endpoint"
   write_handoff "$server_name" "$api_endpoint" "$server_target_ip"
   info "ok: OpenStack Kubernetes bootstrap complete"

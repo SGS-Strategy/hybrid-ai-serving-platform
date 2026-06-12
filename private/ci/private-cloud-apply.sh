@@ -2928,6 +2928,21 @@ bootstrap_k8s() {
   export HA_K8S_VERSION_MINOR="${HA_K8S_VERSION_MINOR:-v1.36}"
   export HA_K8S_POD_CIDR="${HA_K8S_POD_CIDR:-192.168.0.0/16}"
   export HA_K8S_CNI_MANIFEST="${HA_K8S_CNI_MANIFEST:-https://raw.githubusercontent.com/projectcalico/calico/v3.32.0/manifests/calico.yaml}"
+  # ============================================================================
+  # feature/hybrid
+  #  GitLab VM에서 러너 토큰 및 외부망 주소 동적 추출 후 환경변수 내보내기
+  # ============================================================================
+  if optional_apply_phase_enabled "${HA_PRIVATE_CLOUD_SETUP_REGISTRY}"; then
+    local gitlab_ip
+    gitlab_ip="$(first_gitlab_ip || true)"
+    if [[ -n "${gitlab_ip}" ]]; then
+      log "fetching GitLab runner token from GitLab VM for K8s bootstrapping"
+      export GITLAB_TOKEN="$(ssh -F "${SSH_CONFIG}" "${gitlab_ip}" 'sudo cat /var/lib/hybrid-ai/gitlab-bootstrap/runner-token' 2>/dev/null || true)"
+      export GITLAB_URL="${GITLAB_EXTERNAL_URL}"
+    fi
+  fi
+  # ============================================================================
+
   "${ROOT}/private/kubernetes-bootstrap/bootstrap-k8s.sh"
   start_kubectl_tunnel
   export KUBECONFIG="${KUBECONFIG_PATH}"
@@ -3467,6 +3482,72 @@ setup_model_build_platform() {
       kubectl -n argo rollout status deployment/argo-server --timeout=600s
     fi
   fi
+ # ============================================================================
+  #  1. MinIO 자격증명을 model-build 네임스페이스로 자동 동기화 복사
+  # ============================================================================
+  log "syncing MinIO credentials to model-build namespace"
+  if kubectl -n minio-tenant get secret minio-creds-secret >/dev/null 2>&1; then
+    MINIO_ACCESS_KEY="$(kubectl -n minio-tenant get secret minio-creds-secret -o jsonpath='{.data.accessKey}' | base64 -d)"
+    MINIO_SECRET_KEY="$(kubectl -n minio-tenant get secret minio-creds-secret -o jsonpath='{.data.secretKey}' | base64 -d)"
+    
+    kubectl create namespace model-build --dry-run=client -o yaml | kubectl apply -f -
+    kubectl -n model-build create secret generic minio-client-credentials \
+      --from-literal=accessKey="${MINIO_ACCESS_KEY}" \
+      --from-literal=secretKey="${MINIO_SECRET_KEY}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+  else
+    log "warning: minio-creds-secret not found in minio-tenant namespace; skipping minio-client-credentials sync" >&2
+  fi
+
+  # ============================================================================
+  #  2. 외부 연동용 K8s Secret (AWS, GitHub, Slack) 자동 주입 및 생성
+  # ============================================================================
+  log "provisioning external service credentials (AWS, GitHub, Slack) in model-build namespace"
+  kubectl create namespace model-build --dry-run=client -o yaml | kubectl apply -f -
+
+  # AWS ECR 자격증명 자동 주입
+  if [[ -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+    kubectl -n model-build create secret generic aws-ecr-credentials \
+      --from-literal=AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+      --from-literal=AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+      --from-literal=AWS_REGION="${AWS_DEFAULT_REGION:-ap-northeast-2}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    log "ok: aws-ecr-credentials secret successfully provisioned"
+  else
+    log "warning: AWS credentials not found in host environment; skipping aws-ecr-credentials secret" >&2
+  fi
+
+  # GitHub PAT 자격증명 자동 주입
+  if [[ -n "${GITHUB_PAT:-}" ]]; then
+    kubectl -n model-build create secret generic github-credentials \
+      --from-literal=token="${GITHUB_PAT}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    log "ok: github-credentials secret successfully provisioned"
+  else
+    log "warning: GITHUB_PAT not found in host environment; skipping github-credentials secret" >&2
+  fi
+
+  # Slack Webhook URL 자격증명 자동 주입
+  if [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
+    kubectl -n model-build create secret generic slack-credentials \
+      --from-literal=webhook-url="${SLACK_WEBHOOK_URL}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    log "ok: slack-credentials secret successfully provisioned"
+  else
+    log "warning: SLACK_WEBHOOK_URL not found in host environment; skipping slack-credentials secret" >&2
+  fi
+
+  # ============================================================================
+  #  3  GitLab 초기 프로젝트 빌드 기동
+  # ============================================================================
+  if optional_apply_phase_enabled "${HA_PRIVATE_CLOUD_SETUP_REGISTRY}"; then
+    local gitlab_ip
+    gitlab_ip="$(first_gitlab_ip || true)"
+    if [[ -n "${gitlab_ip}" ]]; then
+      setup_initial_gitlab_project "${gitlab_ip}"
+    fi
+  fi
+  # ============================================================================
   kubectl apply -k "${ROOT}/private/kubernetes/model-build-workflows"
   kubectl -n model-build get workflowtemplate model-build-job model-package-job
 }
@@ -3708,6 +3789,92 @@ run_finalize_phases() {
   if [[ "${VALIDATE_GPU}" == "true" ]]; then
     phase validate_gpu_lightweight validate_gpu_lightweight
   fi
+}
+
+#feature/hybrid
+setup_initial_gitlab_project() {
+  local gitlab_ip="$1"
+  local gitlab_token
+  local tmp_git_dir
+  local project_id
+  
+  log "provisioning initial GitLab repository for model pipeline"
+  
+  # 1. GitLab VM에서 러너/관리자 토큰 가져오기
+  gitlab_token="$(ssh -F "${SSH_CONFIG}" "${gitlab_ip}" 'sudo cat /var/lib/hybrid-ai/gitlab-bootstrap/runner-token' 2>/dev/null || true)"
+  [[ -n "${gitlab_token}" ]] || { log "warning: GitLab token not ready; skipping project creation" >&2; return 0; }
+
+  # 2. GitLab REST API를 호출하여 'predictor-model' 비공개 프로젝트 자동 생성
+  log "creating GitLab private repository via REST API..."
+  curl -k -fsS -X POST \
+    -H "PRIVATE-TOKEN: ${gitlab_token}" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\": \"predictor-model\", \"visibility\": \"private\", \"initialize_with_readme\": \"true\"}" \
+    "http://127.0.0.1:${GITLAB_UPSTREAM_PORT}/api/v4/projects" >/dev/null || true
+
+  # 3. 신규 생성된 프로젝트의 고유 ID(Project ID) 동적 추출
+  project_id="$(curl -k -fsS -H "PRIVATE-TOKEN: ${gitlab_token}" "http://127.0.0.1:${GITLAB_UPSTREAM_PORT}/api/v4/projects" | python3 -c "import json, sys; print(json.load(sys.stdin)[0]['id'])" 2>/dev/null || true)"
+  
+  # 4. 수집한 자격 증명들을 GitLab CI/CD 프로젝트 변수(Variables)로 무인 자동 등록
+  if [[ -n "${project_id}" ]]; then
+    log "registering secure credentials into GitLab CI/CD Variables..."
+    
+    create_gitlab_variable() {
+      local name="$1" value="$2" masked="${3:-false}"
+      [[ -n "$value" ]] || return 0
+      curl -k -fsS -X POST \
+        -H "PRIVATE-TOKEN: ${gitlab_token}" \
+        -H "Content-Type: application/json" \
+        -d "{\"key\": \"${name}\", \"value\": \"${value}\", \"masked\": ${masked}, \"protected\": false}" \
+        "http://127.0.0.1:${GITLAB_UPSTREAM_PORT}/api/v4/projects/${project_id}/variables" >/dev/null || true
+    }
+
+    # MinIO 원본 자격증명 복사 (이제 K8s 및 MinIO가 켜져 있으므로 에러 없이 무조건 성공합니다!)
+    local minio_access_key minio_secret_key
+    minio_access_key="$(kubectl -n minio-tenant get secret minio-creds-secret -o jsonpath='{.data.accessKey}' | base64 -d 2>/dev/null || true)"
+    minio_secret_key="$(kubectl -n minio-tenant get secret minio-creds-secret -o jsonpath='{.data.secretKey}' | base64 -d 2>/dev/null || true)"
+
+    create_gitlab_variable "AWS_ACCESS_KEY_ID" "${AWS_ACCESS_KEY_ID:-}" "true"
+    create_gitlab_variable "AWS_SECRET_ACCESS_KEY" "${AWS_SECRET_ACCESS_KEY:-}" "true"
+    create_gitlab_variable "GITHUB_PAT" "${GITHUB_PAT:-}" "true"
+    create_gitlab_variable "SLACK_WEBHOOK_URL" "${SLACK_WEBHOOK_URL:-}" "false"
+    create_gitlab_variable "MINIO_ACCESS_KEY" "${minio_access_key:-}" "true"
+    create_gitlab_variable "MINIO_SECRET_KEY" "${minio_secret_key:-}" "true"
+  fi
+
+  # 5. 호스트 로컬에 임시 디렉토리를 만들고 템플릿 파일 복사 및 값 이식 준비
+  tmp_git_dir="$(mktemp -d)"
+  log "preparing template files in temporary workspace: ${tmp_git_dir}"
+  
+  if [[ -d "${ROOT}/private/templates" ]]; then
+    cp -a "${ROOT}/private/templates/." "${tmp_git_dir}/"
+    log "copied template files from private/templates/ to workspace"
+    
+    # 깃랩 CI 템플릿 내부의 ECR 엔드포인트를 호스트 변수값으로 정밀 이식
+    if [[ -f "${tmp_git_dir}/.gitlab-ci.yml" && -n "${ECR_ENDPOINT:-}" ]]; then
+      sed -i "s|ECR_ENDPOINT_PLACEHOLDER|${ECR_ENDPOINT}|g" "${tmp_git_dir}/.gitlab-ci.yml"
+      log "successfully injected ECR_ENDPOINT (${ECR_ENDPOINT}) into .gitlab-ci.yml"
+    fi
+  else
+    log "warning: private/templates/ directory not found on host; skipping template copy" >&2
+  fi
+
+  # 6. 안전한 서브쉘(Subshell) 내부에서 Git 작업 및 멱등성 보장형 강제 푸시 실행
+  (
+    cd "${tmp_git_dir}"
+    git init -b main >/dev/null
+    git config user.email "gitlab-ci-bridge@intp.me"
+    git config user.name "GitLab-Argo-Bridge-Bot"
+    git add .
+    git commit -m "initial: 무인 MLOps 템플릿 코드 구조 세팅 완료" >/dev/null
+    
+    log "pushing template code to GitLab VM..."
+    git push --force "http://root:${gitlab_token}@127.0.0.1:${GITLAB_UPSTREAM_PORT}/root/predictor-model.git" main:main >/dev/null 2>&1 || true
+  )
+  
+  # 7. 작업 공간 정리 및 완료 로그 기록
+  rm -rf "${tmp_git_dir}"
+  log "ok: GitLab initial repository 'root/predictor-model' with template code and CI variables is ready"
 }
 
 main() {
