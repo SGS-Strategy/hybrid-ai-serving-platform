@@ -816,45 +816,65 @@ wait_for_kubernetes_api() {
 # ==============================================================================
 #   GitLab Runner 주입 엔진
 # ==============================================================================
-# private/kubernetes-bootstrap/bootstrap-k8s.sh 내부의 함수 정의부 수정
+# private/kubernetes-bootstrap/bootstrap-k8s.sh 내부의 함수 정의부 최종 반영본 (Harbor 사설 프록시 복구 버전)
 install_gitlab_runner_automation() {
   local master_host="$1"
-  
+
   info "--------------------------------------------------------"
-  info "Fox: GitLab Runner 무인 배포 및 사설 인프라 연동 자동화를 가동"
+  info "Fox: GitLab Runner 무인 배포 및 사설 인프라 연동 자동화를 가동합니다."
   info "--------------------------------------------------------"
-  
-  local target_gitlab_url="${GITLAB_URL:-https://gitlab.internal.intp.me}"
+  local target_gitlab_url="${GITLAB_URL:-https://gitlab.intp.me}"
   local target_gitlab_token="${GITLAB_TOKEN:-GLRT-PLACEHOLDER-TOKEN}"
-  
+
   info "  Target 사설 GitLab 엔드포인트: ${target_gitlab_url}"
 
-  ssh_node "$master_host" bash -s -- "$target_gitlab_url" "$target_gitlab_token" <<'REMOTE'
+  local gitlab_domain
+  gitlab_domain="${target_gitlab_url#*://}" # "gitlab.intp.me" 추출
+  gitlab_domain="${gitlab_domain%%/*}"      # 포트나 슬래시 제거
+
+  # 마스터 노드 관점에서 gitlab.intp.me의 실제 사설 IP를 동적으로 추출
+  local gitlab_ip
+  gitlab_ip=$(ssh_node "$master_host" "getent hosts ${gitlab_domain} | awk '{print \$1}'" | tr -d '\r\n' || true)
+  
+  if [[ -z "${gitlab_ip}" ]]; then
+    # getent로 해석 안 될 경우를 대비해 핑 테스트 결과로부터 추출하는 방어적 백업 설계
+    gitlab_ip=$(ssh_node "$master_host" "ping -c 1 ${gitlab_domain} | head -n 1 | awk -F'[()]' '{print \$2}'" | tr -d '\r\n' || true)
+  fi
+  
+  info "  Detected GitLab VM Private IP: ${gitlab_ip}"
+
+  # 마스터 노드 원격 진입 후 백엔드 비대화형 자원 패키징 시작
+  ssh_node "$master_host" bash -s -- "$target_gitlab_url" "$target_gitlab_token" "$gitlab_ip" <<'REMOTE'
 set -euo pipefail
 gl_url="$1"
 gl_token="$2"
+gl_ip="$3"
 
+# 1. 마스터 노드 내부에 Helm v3 패키지 관리자 다운로드 및 기동
 if ! command -v helm >/dev/null 2>&1; then
   echo "Installing Helm v3 on master node..."
   curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 fi
 
+# 2. 오피셜 깃랩 차트 레포지토리 동기화 및 인덱스 싱크
 helm repo add gitlab https://charts.gitlab.io --force-update >/dev/null
 helm repo update >/dev/null
 
+# 3. 팀 아키텍처 규칙에 따른 모델 빌드 격리 방(Namespace) 선행 생성
 sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf create namespace model-build --dry-run=client -o yaml | sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f -
 
-# private/kubernetes-bootstrap/bootstrap-k8s.sh 내부의 함수 정의부 중 일부 수정
-
 echo "Deploying GitLab Runner with Private Harbor Cache configurations..."
-helm upgrade --install gitlab-runner gitlab/gitlab-runner \
+#  이미지 주소를 사내 Harbor 사설 프록시 대역(harbor.intp.me/docker-hub/gitlab/...)으로 재지정하여 배포하는 헬름 차트 명령어
+sudo helm --kubeconfig=/etc/kubernetes/admin.conf upgrade --install gitlab-runner gitlab/gitlab-runner \
   --namespace model-build \
   --set gitlabUrl="${gl_url}" \
   --set runnerRegistrationToken="${gl_token}" \
   --set runners.tags="model-build" \
   --set image.registry="harbor.intp.me" \
-  --set image.image="docker-hub/library/gitlab-runner" \
+  --set image.image="docker-hub/gitlab/gitlab-runner" \
   --set runners.helpers.image="harbor.intp.me/docker-hub/gitlab/gitlab-runner-helper" \
+  --set-json "hostAliases=[{\"ip\":\"${gl_ip}\",\"hostnames\":[\"gitlab.intp.me\"]}]" \
+  --set-json 'envVars=[{"name":"GITLAB_RUNNER_DISABLE_SSL_VERIFICATION","value":"true"}]' \
   --set runners.config="[[runners]]
     name = \"private-build-worker-k8s-runner\"
     executor = \"kubernetes\"
@@ -867,7 +887,7 @@ helm upgrade --install gitlab-runner gitlab/gitlab-runner \
         claim_name = \"model-build-cache\"
         mount_path = \"/cache\""
 
-echo "🎉 GitLab Runner 배포 신호 전송 완료 : 삼겹살을 위대하게!"
+echo "🎉 GitLab Runner 제한망 배포 신호 탄막 전송 완료!"
 REMOTE
 }
 

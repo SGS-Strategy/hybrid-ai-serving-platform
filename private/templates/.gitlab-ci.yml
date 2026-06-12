@@ -28,18 +28,18 @@ build-base-image:
     name: harbor.intp.me/library/kaniko-executor:debug
     entrypoint: [""]
   script:
-    - echo "[LOG] Harbor 인증 수립 및 Kaniko 베이스 이미지 빌드 시작..."
-    - mkdir -p /kaniko/.docker
-    - echo "{\"credsStore\":\"ecr-login\"}" > /kaniko/.docker/config.json
-    - /kaniko/executor \
-      --context "${CI_PROJECT_DIR}" \
-      --dockerfile "${CI_PROJECT_DIR}/Dockerfile.build" \
-      --destination "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${BASE_IMAGE_NAME}:latest" \
-      --registry-mirror=index.docker.io=harbor.intp.me/docker-hub
+    - |
+      echo "[LOG] Harbor 인증 수립 및 Kaniko 베이스 이미지 빌드 시작..."
+      mkdir -p /kaniko/.docker
+      echo '{"credsStore":"ecr-login"}' > /kaniko/.docker/config.json
+      /kaniko/executor \
+        --context "${CI_PROJECT_DIR}" \
+        --dockerfile "${CI_PROJECT_DIR}/Dockerfile.build" \
+        --destination "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${BASE_IMAGE_NAME}:latest" \
+        --registry-mirror=index.docker.io=harbor.intp.me/docker-hub
   tags:
     - model-build
   rules:
-    # Dockerfile.build 파일이 변경되었거나, 수동으로 베이스 빌드 변수를 넣고 실행했을 때만 단독 기동
     - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
       changes:
         - Dockerfile.build
@@ -57,28 +57,28 @@ build-serving-image:
     name: harbor.intp.me/library/kaniko-executor:debug
     entrypoint: [""]
   script:
-    - echo "[LOG] MinIO 클라이언트(mc) 설치 및 모델 아티팩트 다운로드..."
-    - curl -k -fsSL -o /tmp/mc https://dl.min.io/client/mc/release/linux-amd64/mc
-    - chmod +x /tmp/mc
-    - /tmp/mc alias set minio "${MINIO_ENDPOINT}" "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}"
-    
-    # MinIO artifacts/ 버킷에 저장된 최신 모델 파일을 서빙용 컨텍스트 내부로 복사
-    - mkdir -p "${CI_PROJECT_DIR}/services/inference-api/model-artifacts"
-    - /tmp/mc cp --recursive "minio/artifacts/models/latest/" "${CI_PROJECT_DIR}/services/inference-api/model-artifacts/"
-    
-    - echo "[LOG] Harbor 인증 수립 및 Kaniko 서빙 이미지 빌드 시작..."
-    - mkdir -p /kaniko/.docker
-    - echo "{\"credsStore\":\"ecr-login\"}" > /kaniko/.docker/config.json
-    - /kaniko/executor \
-      --context "${CI_PROJECT_DIR}/services/inference-api" \
-      --dockerfile "${CI_PROJECT_DIR}/services/inference-api/Dockerfile" \
-      --destination "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${TRAIN_IMAGE_NAME}:${CI_COMMIT_REF_NAME}" \
-      --destination "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${TRAIN_IMAGE_NAME}:latest" \
-      --registry-mirror=index.docker.io=harbor.intp.me/docker-hub
+    - |
+      echo "[LOG] MinIO 클라이언트(mc) 설치 및 모델 아티팩트 다운로드..."
+      curl -k -fsSL -o /tmp/mc https://dl.min.io/client/mc/release/linux-amd64/mc
+      chmod +x /tmp/mc
+      /tmp/mc alias set minio "${MINIO_ENDPOINT}" "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}"
+      
+      # MinIO artifacts/ 버킷에 저장된 최신 모델 파일을 서빙용 컨텍스트 내부로 복사
+      mkdir -p "${CI_PROJECT_DIR}/services/inference-api/model-artifacts"
+      /tmp/mc cp --recursive "minio/artifacts/models/latest/" "${CI_PROJECT_DIR}/services/inference-api/model-artifacts/"
+      
+      echo "[LOG] Harbor 인증 수립 및 Kaniko 서빙 이미지 빌드 시작..."
+      mkdir -p /kaniko/.docker
+      echo '{"credsStore":"ecr-login"}' > /kaniko/.docker/config.json
+      /kaniko/executor \
+        --context "${CI_PROJECT_DIR}/services/inference-api" \
+        --dockerfile "${CI_PROJECT_DIR}/services/inference-api/Dockerfile" \
+        --destination "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${TRAIN_IMAGE_NAME}:${CI_COMMIT_REF_NAME}" \
+        --destination "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${TRAIN_IMAGE_NAME}:latest" \
+        --registry-mirror=index.docker.io=harbor.intp.me/docker-hub
   tags:
     - model-build
   rules:
-    # 릴리즈 태그(예: v1.0.0)가 푸시되었거나, 수동으로 릴리즈 빌드 변수를 넣고 기동했을 때만 단독 기동
     - if: '$CI_COMMIT_TAG =~ /^v.*/'
     - if: '$TRIGGER_PHASE == "release-train"'
 
@@ -89,8 +89,9 @@ scan-serving-image:
     name: harbor.intp.me/docker-hub/aquasec/trivy:latest
     entrypoint: [""]
   script:
-    - echo "[LOG] 사설 이미지 보안 취약점 진단 -> /images/train"
-    - trivy image --severity HIGH,CRITICAL --exit-code 0 "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${TRAIN_IMAGE_NAME}:${CI_COMMIT_REF_NAME}"
+    - |
+      echo "[LOG] 사설 이미지 보안 취약점 진단 -> /images/train"
+      trivy image --severity HIGH,CRITICAL --exit-code 0 "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${TRAIN_IMAGE_NAME}:${CI_COMMIT_REF_NAME}"
   tags:
     - model-build
   rules:
@@ -102,23 +103,24 @@ promote-to-ecr:
   stage: promote-train
   image: harbor.intp.me/infra/mlops-tools:latest
   script:
-    - echo "[LOG] AWS ECR 로그인 및 이미지 이송(Promotion) 시작..."
-    - aws ecr get-login-password --region "${AWS_REGION}" | skopeo login --username AWS --password-stdin "${ECR_ENDPOINT}"
-    
-    # Harbor 사설 이미지(/images/train)를 AWS ECR로 정밀 복사
-    - skopeo copy --all --src-tls-verify=false "docker://${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${TRAIN_IMAGE_NAME}:${CI_COMMIT_REF_NAME}" "docker://${ECR_API_URI}:${CI_COMMIT_REF_NAME}"
-    - skopeo copy --all --src-tls-verify=false "docker://${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${TRAIN_IMAGE_NAME}:${CI_COMMIT_REF_NAME}" "docker://${ECR_API_URI}:latest"
+    - |
+      echo "[LOG] AWS ECR 로그인 및 이미지 이송(Promotion) 시작..."
+      aws ecr get-login-password --region "${AWS_REGION}" | skopeo login --username AWS --password-stdin "${ECR_ENDPOINT}"
+      
+      # Harbor 사설 이미지(/images/train)를 AWS ECR로 정밀 복사
+      skopeo copy --all --src-tls-verify=false "docker://${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${TRAIN_IMAGE_NAME}:${CI_COMMIT_REF_NAME}" "docker://${ECR_API_URI}:${CI_COMMIT_REF_NAME}"
+      skopeo copy --all --src-tls-verify=false "docker://${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${TRAIN_IMAGE_NAME}:${CI_COMMIT_REF_NAME}" "docker://${ECR_API_URI}:latest"
 
-    - echo "[LOG] 공용 GitHub GitOps 저장소 클론 및 태그 업데이트..."
-    - git clone "https://Seungmin-Jeong2001:${GITHUB_PAT}@github.com/SGS-Strategy/hybrid-ai-serving-platform.git" github-repo
-    - cd github-repo
-    - sed -i "s|image: .*/inference-api:.*|image: ${ECR_API_URI}:${CI_COMMIT_REF_NAME}|g" public/k8s/serving/predictive-model/pdm-isvc.yaml
+      echo "[LOG] 공용 GitHub GitOps 저장소 클론 및 태그 업데이트..."
+      git clone "https://Seungmin-Jeong2001:${GITHUB_PAT}@github.com/SGS-Strategy/hybrid-ai-serving-platform.git" github-repo
+      cd github-repo
+      sed -i "s|image: .*/inference-api:.*|image: ${ECR_API_URI}:${CI_COMMIT_REF_NAME}|g" public/k8s/serving/predictive-model/pdm-isvc.yaml
 
-    - git config --global user.email "${GIT_USER_EMAIL}"
-    - git config --global user.name "GitLab-CI-Bridge-Bot"
-    - git add public/k8s/serving/predictive-model/pdm-isvc.yaml
-    - git commit -m "chore(ops): [사설 빌드 성공] ECR 이미지 및 GitOps 동기화 완료 [${CI_COMMIT_REF_NAME}] [skip ci]" || echo "No changes to commit"
-    - git push origin HEAD
+      git config --global user.email "${GIT_USER_EMAIL}"
+      git config --global user.name "GitLab-CI-Bridge-Bot"
+      git add public/k8s/serving/predictive-model/pdm-isvc.yaml
+      git commit -m "chore(ops): [사설 빌드 성공] ECR 이미지 및 GitOps 동기화 완료 [${CI_COMMIT_REF_NAME}] [skip ci]" || echo "No changes to commit"
+      git push origin HEAD
   tags:
     - model-build
   rules:
@@ -139,8 +141,8 @@ notify-success:
     - if: '$TRIGGER_PHASE == "release-train"'
     - if: '$TRIGGER_PHASE == "build-base"'
   script:
-    - apt-get update -qq && apt-get install -y -qq curl
     - |
+      apt-get update -qq && apt-get install -y -qq curl
       curl -X POST -H 'Content-type: application/json' \
         --data "{
           \"attachments\": [
@@ -168,8 +170,8 @@ notify-failure:
     - if: '$TRIGGER_PHASE == "release-train"'
     - if: '$TRIGGER_PHASE == "build-base"'
   script:
-    - apt-get update -qq && apt-get install -y -qq curl
     - |
+      apt-get update -qq && apt-get install -y -qq curl
       curl -X POST -H 'Content-type: application/json' \
         --data "{
           \"attachments\": [
