@@ -1,0 +1,547 @@
+name: Public Terraform Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Terraform action to run
+        required: true
+        default: apply
+        type: choice
+        options:
+          - apply
+          - destroy
+
+permissions:
+  id-token: write
+
+env:
+  AWS_REGION: ap-northeast-2
+  EKS_CLUSTER_NAME: sgs-hasp-eks
+  SSM_BOOTSTRAP_TAG_KEY: Name
+  SSM_BOOTSTRAP_TAG_VALUE: sgs-hasp-general
+  SSM_WAIT_ATTEMPTS: 180
+  SSM_WAIT_INTERVAL_SECONDS: 15
+
+concurrency:
+  group: run-public-terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Package in-cluster Terraform stack
+        run: |
+          tar -czf terraform-incluster.tar.gz -C public terraform-incluster
+
+      - name: Resolve bootstrap admin role ARN
+        id: bootstrap_role
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "value=arn:aws:iam::${ACCOUNT_ID}:role/sgs-hasp-eks-bootstrap-admin" >> "$GITHUB_OUTPUT"
+
+      - name: Write optional secret tfvars override
+        env:
+          TFVARS_CONTENT: ${{ secrets.PUBLIC_TERRAFORM_TFVARS }}
+        working-directory: public/terraform
+        run: |
+          if [[ -n "$TFVARS_CONTENT" ]]; then
+            printf '%s\n' "$TFVARS_CONTENT" > zz-secret.auto.tfvars
+          fi
+
+      - name: Terraform fmt check
+        working-directory: public/terraform
+        run: terraform fmt -check
+
+      - name: Terraform init
+        working-directory: public/terraform
+        run: terraform init
+
+      - name: Terraform validate
+        working-directory: public/terraform
+        run: terraform validate
+
+      - name: Terraform plan
+        if: ${{ inputs.action == 'apply' }}
+        working-directory: public/terraform
+        run: terraform plan -out=tfplan
+
+      - name: Upload tfplan artifact
+        if: ${{ inputs.action == 'apply' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-public-terraform-tfplan
+          path: public/terraform/tfplan
+
+      - name: Terraform apply
+        if: ${{ inputs.action == 'apply' }}
+        working-directory: public/terraform
+        run: terraform apply -auto-approve tfplan
+
+      - name: Resolve SSM bootstrap instance
+        id: resolve_instance
+        run: |
+          RUNNING_INSTANCE_IDS=$(aws ec2 describe-instances \
+            --region "${AWS_REGION}" \
+            --filters "Name=tag:${SSM_BOOTSTRAP_TAG_KEY},Values=${SSM_BOOTSTRAP_TAG_VALUE}" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[].Instances[].InstanceId' \
+            --output text)
+
+          if [[ -z "${RUNNING_INSTANCE_IDS}" || "${RUNNING_INSTANCE_IDS}" == "None" ]]; then
+            echo "No running EC2 instances found for tag ${SSM_BOOTSTRAP_TAG_KEY}=${SSM_BOOTSTRAP_TAG_VALUE}."
+            if [[ "${{ inputs.action }}" == "destroy" ]]; then
+              echo "value=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            exit 1
+          fi
+
+          MANAGED_INSTANCE_IDS=$(aws ssm describe-instance-information \
+            --region "${AWS_REGION}" \
+            --query 'InstanceInformationList[].InstanceId' \
+            --output text)
+
+          TARGET_INSTANCE_ID=""
+          for instance_id in ${RUNNING_INSTANCE_IDS}; do
+            for managed_id in ${MANAGED_INSTANCE_IDS}; do
+              if [[ "${instance_id}" == "${managed_id}" ]]; then
+                TARGET_INSTANCE_ID="${instance_id}"
+                break 2
+              fi
+            done
+          done
+
+          if [[ -z "${TARGET_INSTANCE_ID}" ]]; then
+            echo "No SSM-managed running instance found for tag ${SSM_BOOTSTRAP_TAG_KEY}=${SSM_BOOTSTRAP_TAG_VALUE}."
+            if [[ "${{ inputs.action }}" == "destroy" ]]; then
+              echo "value=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            exit 1
+          fi
+
+          echo "value=${TARGET_INSTANCE_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Sync MSK topics via SSM
+        if: ${{ inputs.action == 'apply' }}
+        id: sync_msk_topics
+        env:
+          TARGET_INSTANCE_ID: ${{ steps.resolve_instance.outputs.value }}
+        working-directory: public/terraform
+        run: |
+          MANAGE_MSK_TOPICS=$(terraform output -raw manage_msk_topics)
+          if [[ "${MANAGE_MSK_TOPICS}" != "true" ]]; then
+            echo "MSK topic reconciliation is disabled."
+            exit 0
+          fi
+
+          export MSK_BOOTSTRAP_BROKERS="$(terraform output -raw msk_bootstrap_brokers)"
+          export MSK_TOPIC_REPLICATION_FACTOR="$(terraform output -raw msk_topic_replication_factor)"
+          export MSK_TOPIC_CONFIGS_JSON="$(terraform output -json msk_topic_configs)"
+          export MSK_TOPICS_JSON="$(terraform output -json msk_topics)"
+          export SCRIPT_B64="$(base64 -w 0 scripts/sync-msk-topics.sh)"
+
+          python - <<PY
+          import json, os
+
+          commands = [
+              "set -eu",
+              f"echo '{os.environ['SCRIPT_B64']}' | base64 -d > /tmp/sync-msk-topics.sh",
+              "chmod +x /tmp/sync-msk-topics.sh",
+              f"export MSK_BOOTSTRAP_BROKERS='{os.environ['MSK_BOOTSTRAP_BROKERS']}'",
+              f"export MSK_TOPIC_REPLICATION_FACTOR='{os.environ['MSK_TOPIC_REPLICATION_FACTOR']}'",
+              f"export MSK_TOPIC_CONFIGS_JSON='{os.environ['MSK_TOPIC_CONFIGS_JSON']}'",
+              f"export MSK_TOPICS_JSON='{os.environ['MSK_TOPICS_JSON']}'",
+              "/bin/sh /tmp/sync-msk-topics.sh",
+          ]
+
+          with open("msk-commands.json", "w") as fp:
+              json.dump({"commands": commands}, fp)
+          PY
+
+          COMMAND_ID=$(aws ssm send-command \
+            --region "${AWS_REGION}" \
+            --instance-ids "${TARGET_INSTANCE_ID}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Sync MSK topics on ${EKS_CLUSTER_NAME}" \
+            --parameters file://msk-commands.json \
+            --query 'Command.CommandId' \
+            --output text)
+
+          echo "command_id=${COMMAND_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for MSK topics sync result
+        if: ${{ inputs.action == 'apply' && steps.sync_msk_topics.outputs.command_id != '' }}
+        env:
+          COMMAND_ID: ${{ steps.sync_msk_topics.outputs.command_id }}
+          TARGET_INSTANCE_ID: ${{ steps.resolve_instance.outputs.value }}
+        run: |
+          for ((i=1; i<=SSM_WAIT_ATTEMPTS; i++)); do
+            STATUS=$(aws ssm get-command-invocation \
+              --region "${AWS_REGION}" \
+              --command-id "${COMMAND_ID}" \
+              --instance-id "${TARGET_INSTANCE_ID}" \
+              --query 'Status' \
+              --output text)
+
+            echo "MSK topics sync status (${i}/${SSM_WAIT_ATTEMPTS}): ${STATUS}"
+
+            if [[ "${STATUS}" == "Success" ]]; then
+              aws ssm get-command-invocation \
+                --region "${AWS_REGION}" \
+                --command-id "${COMMAND_ID}" \
+                --instance-id "${TARGET_INSTANCE_ID}" \
+                --query 'StandardOutputContent' \
+                --output text || true
+              exit 0
+            fi
+
+            if [[ "${STATUS}" == "Failed" || "${STATUS}" == "Cancelled" || "${STATUS}" == "TimedOut" || "${STATUS}" == "Undeliverable" || "${STATUS}" == "Terminated" ]]; then
+              aws ssm get-command-invocation \
+                --region "${AWS_REGION}" \
+                --command-id "${COMMAND_ID}" \
+                --instance-id "${TARGET_INSTANCE_ID}" \
+                --query 'StandardOutputContent' \
+                --output text || true
+              aws ssm get-command-invocation \
+                --region "${AWS_REGION}" \
+                --command-id "${COMMAND_ID}" \
+                --instance-id "${TARGET_INSTANCE_ID}" \
+                --query 'StandardErrorContent' \
+                --output text || true
+              exit 1
+            fi
+
+            sleep "${SSM_WAIT_INTERVAL_SECONDS}"
+          done
+
+          echo "MSK topics sync timed out."
+          exit 1
+
+      - name: Delete ArgoCD apps before destroy
+        if: ${{ inputs.action == 'destroy' && steps.resolve_instance.outputs.value != '' }}
+        id: delete_argocd_apps
+        env:
+          TARGET_INSTANCE_ID: ${{ steps.resolve_instance.outputs.value }}
+          BOOTSTRAP_ROLE_ARN: ${{ steps.bootstrap_role.outputs.value }}
+        run: |
+          python - <<'PY'
+          import json, os
+
+          commands = [
+              "set -euo pipefail",
+              "if ! command -v kubectl >/dev/null 2>&1; then curl -fsSLo /tmp/kubectl https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl && chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; fi",
+              "export KUBECONFIG=/tmp/eks-kubeconfig",
+              f"ASSUME_ROLE_OUTPUT=$(aws sts assume-role --role-arn {os.environ['BOOTSTRAP_ROLE_ARN']} --role-session-name argocd-cleanup --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)",
+              "if [ -z \"$ASSUME_ROLE_OUTPUT\" ] || [ \"$ASSUME_ROLE_OUTPUT\" = \"None\" ]; then echo 'Failed to assume bootstrap role.'; exit 1; fi",
+              "read AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN <<< \"$ASSUME_ROLE_OUTPUT\"",
+              "export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN",
+              f"aws eks update-kubeconfig --region {os.environ['AWS_REGION']} --name {os.environ['EKS_CLUSTER_NAME']} --kubeconfig /tmp/eks-kubeconfig",
+              "kubectl delete ingress --all -n inference --wait --timeout=60s || true",
+              "sleep 15",
+              "kubectl get application -n argocd -o name | xargs -I{} kubectl patch {} -n argocd -p '{\"metadata\":{\"finalizers\":[]}}' --type=merge || true",
+              "kubectl delete application --all -n argocd --wait --timeout=120s || true",
+              "kubectl get inferenceservice -n inference -o name 2>/dev/null | xargs -I{} kubectl patch {} -n inference -p '{\"metadata\":{\"finalizers\":[]}}' --type=merge || true",
+              "kubectl delete inferenceservice --all -n inference --force --grace-period=0 || true",
+              "for resource in $(kubectl api-resources --verbs=list --namespaced -o name 2>/dev/null); do kubectl get $resource -n inference -o name 2>/dev/null | xargs -I{} kubectl patch {} -n inference -p '{\"metadata\":{\"finalizers\":[]}}' --type=merge 2>/dev/null || true; done",
+              "kubectl delete pvc --all -n inference --wait --timeout=60s || true",
+              "kubectl delete all --all -n inference --force --grace-period=0 || true",
+              "kubectl patch namespace inference -p '{\"metadata\":{\"finalizers\":[]}}' --type=merge || true",
+              "kubectl delete namespace inference --force --grace-period=0 || true",
+              "kubectl patch namespace argocd -p '{\"metadata\":{\"finalizers\":[]}}' --type=merge || true",
+              "kubectl delete namespace argocd --force --grace-period=0 || true",
+              "sleep 30",
+          ]
+
+          with open("argocd-cleanup-commands.json", "w") as fp:
+              json.dump({"commands": commands}, fp)
+          PY
+
+          COMMAND_ID=$(aws ssm send-command \
+            --region "${AWS_REGION}" \
+            --instance-ids "${TARGET_INSTANCE_ID}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Delete ArgoCD apps before destroy" \
+            --parameters file://argocd-cleanup-commands.json \
+            --query 'Command.CommandId' \
+            --output text)
+
+          echo "command_id=${COMMAND_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for ArgoCD cleanup
+        if: ${{ inputs.action == 'destroy' && steps.resolve_instance.outputs.value != '' }}
+        env:
+          COMMAND_ID: ${{ steps.delete_argocd_apps.outputs.command_id }}
+          TARGET_INSTANCE_ID: ${{ steps.resolve_instance.outputs.value }}
+        run: |
+          for ((i=1; i<=SSM_WAIT_ATTEMPTS; i++)); do
+            STATUS=$(aws ssm get-command-invocation \
+              --region "${AWS_REGION}" \
+              --command-id "${COMMAND_ID}" \
+              --instance-id "${TARGET_INSTANCE_ID}" \
+              --query 'Status' \
+              --output text)
+
+            echo "ArgoCD cleanup status (${i}/${SSM_WAIT_ATTEMPTS}): ${STATUS}"
+
+            if [[ "${STATUS}" == "Success" ]]; then
+              break
+            fi
+
+            if [[ "${STATUS}" == "Failed" || "${STATUS}" == "Cancelled" || "${STATUS}" == "TimedOut" || "${STATUS}" == "Undeliverable" || "${STATUS}" == "Terminated" ]]; then
+              aws ssm get-command-invocation \
+                --region "${AWS_REGION}" \
+                --command-id "${COMMAND_ID}" \
+                --instance-id "${TARGET_INSTANCE_ID}" \
+                --query 'StandardErrorContent' \
+                --output text || true
+              exit 1
+            fi
+
+            sleep "${SSM_WAIT_INTERVAL_SECONDS}"
+          done
+
+      - name: Send in-cluster Terraform command through SSM
+        if: ${{ steps.resolve_instance.outputs.value != '' }}
+        id: send_incluster
+        env:
+          TF_ACTION: ${{ inputs.action }}
+          TARGET_INSTANCE_ID: ${{ steps.resolve_instance.outputs.value }}
+          BOOTSTRAP_ROLE_ARN: ${{ steps.bootstrap_role.outputs.value }}
+        run: |
+          INCLUSTER_TF_B64=$(base64 -w 0 terraform-incluster.tar.gz)
+          export INCLUSTER_TF_B64
+          python - <<'PY'
+          import json
+          import os
+
+          tf_action = os.environ["TF_ACTION"]
+          tf_command = "terraform -chdir=/tmp/hasp-bootstrap/terraform-incluster apply -auto-approve"
+          if tf_action == "destroy":
+              tf_command = "terraform -chdir=/tmp/hasp-bootstrap/terraform-incluster destroy -auto-approve"
+
+          commands = [
+              "set -euo pipefail",
+              "if ! command -v kubectl >/dev/null 2>&1; then curl -fsSLo /tmp/kubectl https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl && chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; fi",
+              "if ! command -v terraform >/dev/null 2>&1; then curl -fsSLo /tmp/terraform.zip https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip && python3 - <<'INNER'\nimport zipfile\nwith zipfile.ZipFile('/tmp/terraform.zip') as zf:\n    zf.extractall('/tmp/terraform-bin')\nINNER\nsudo mv /tmp/terraform-bin/terraform /usr/local/bin/terraform && sudo chmod +x /usr/local/bin/terraform; fi",
+              "export KUBECONFIG=/tmp/eks-kubeconfig",
+              f"ASSUME_ROLE_OUTPUT=$(aws sts assume-role --role-arn {os.environ['BOOTSTRAP_ROLE_ARN']} --role-session-name terraform-incluster --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)",
+              "if [ -z \"$ASSUME_ROLE_OUTPUT\" ] || [ \"$ASSUME_ROLE_OUTPUT\" = \"None\" ]; then echo 'Failed to assume bootstrap role.'; exit 1; fi",
+              "read AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN <<< \"$ASSUME_ROLE_OUTPUT\"",
+              "export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN",
+              f"aws eks update-kubeconfig --region {os.environ['AWS_REGION']} --name {os.environ['EKS_CLUSTER_NAME']} --kubeconfig /tmp/eks-kubeconfig",
+              "rm -rf /tmp/hasp-bootstrap && mkdir -p /tmp/hasp-bootstrap",
+              f"echo {os.environ['INCLUSTER_TF_B64']} | base64 -d > /tmp/hasp-bootstrap/terraform-incluster.tar.gz",
+              "tar -xzf /tmp/hasp-bootstrap/terraform-incluster.tar.gz -C /tmp/hasp-bootstrap",
+              "terraform -chdir=/tmp/hasp-bootstrap/terraform-incluster init",
+              # destroy 시 namespace finalizer로 인한 타임아웃 방지: namespace finalizer 제거 후 state에서 제거
+              "if [ '{}' = 'destroy' ]; then kubectl patch namespace argocd -p '{{\"metadata\":{{\"finalizers\":[]}}}}' --type=merge 2>/dev/null || true; kubectl patch namespace inference -p '{{\"metadata\":{{\"finalizers\":[]}}}}' --type=merge 2>/dev/null || true; kubectl delete namespace argocd inference --force --grace-period=0 2>/dev/null || true; sleep 10; terraform -chdir=/tmp/hasp-bootstrap/terraform-incluster state rm kubernetes_namespace.argocd kubernetes_namespace.inference 2>/dev/null || true; fi".format(tf_action),
+              tf_command,
+          ]
+
+          with open("commands.json", "w", encoding="utf-8") as fp:
+              json.dump({"commands": commands}, fp)
+          PY
+
+          COMMAND_ID=$(aws ssm send-command \
+            --region "${AWS_REGION}" \
+            --instance-ids "${TARGET_INSTANCE_ID}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Run terraform-incluster ${TF_ACTION} on ${EKS_CLUSTER_NAME}" \
+            --parameters file://commands.json \
+            --query 'Command.CommandId' \
+            --output text)
+
+          echo "command_id=${COMMAND_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for in-cluster Terraform result
+        if: ${{ steps.resolve_instance.outputs.value != '' }}
+        env:
+          COMMAND_ID: ${{ steps.send_incluster.outputs.command_id }}
+          TARGET_INSTANCE_ID: ${{ steps.resolve_instance.outputs.value }}
+        run: |
+          if [[ -z "${COMMAND_ID}" ]]; then
+            echo "Missing command id."
+            exit 1
+          fi
+
+          for ((i=1; i<=SSM_WAIT_ATTEMPTS; i++)); do
+            STATUS=$(aws ssm get-command-invocation \
+              --region "${AWS_REGION}" \
+              --command-id "${COMMAND_ID}" \
+              --instance-id "${TARGET_INSTANCE_ID}" \
+              --query 'Status' \
+              --output text)
+
+            echo "Current in-cluster Terraform status (${i}/${SSM_WAIT_ATTEMPTS}): ${STATUS}"
+
+            if [[ "${STATUS}" == "Success" ]]; then
+              break
+            fi
+
+            if [[ "${STATUS}" == "Failed" || "${STATUS}" == "Cancelled" || "${STATUS}" == "TimedOut" || "${STATUS}" == "Undeliverable" || "${STATUS}" == "Terminated" ]]; then
+              echo "In-cluster Terraform failed with status: ${STATUS}"
+              aws ssm get-command-invocation \
+                --region "${AWS_REGION}" \
+                --command-id "${COMMAND_ID}" \
+                --instance-id "${TARGET_INSTANCE_ID}" \
+                --query 'StandardOutputContent' \
+                --output text || true
+              aws ssm get-command-invocation \
+                --region "${AWS_REGION}" \
+                --command-id "${COMMAND_ID}" \
+                --instance-id "${TARGET_INSTANCE_ID}" \
+                --query 'StandardErrorContent' \
+                --output text || true
+              exit 1
+            fi
+
+            sleep "${SSM_WAIT_INTERVAL_SECONDS}"
+          done
+
+          FINAL_STATUS=$(aws ssm get-command-invocation \
+            --region "${AWS_REGION}" \
+            --command-id "${COMMAND_ID}" \
+            --instance-id "${TARGET_INSTANCE_ID}" \
+            --query 'Status' \
+            --output text)
+
+          if [[ "${FINAL_STATUS}" != "Success" ]]; then
+            echo "In-cluster Terraform did not finish successfully. Final status: ${FINAL_STATUS}"
+            exit 1
+          fi
+
+          aws ssm get-command-invocation \
+            --region "${AWS_REGION}" \
+            --command-id "${COMMAND_ID}" \
+            --instance-id "${TARGET_INSTANCE_ID}" \
+            --query 'StandardOutputContent' \
+            --output text || true
+
+      - name: Update Route53 A record for Internal ALB
+        if: ${{ inputs.action == 'apply' && steps.resolve_instance.outputs.value != '' }}
+        run: |
+          HOSTED_ZONE_ID="Z02027133DFPOVFLKA9YK"
+          DOMAIN="dashboard.sgs-hasp.click"
+
+          # ArgoCD sync 후 ALB 생성까지 대기
+          sleep 30
+
+          # Internal ALB DNS 주소 조회 (태그 기반)
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --region "${AWS_REGION}" \
+            --query "LoadBalancers[?Scheme=='internal'].DNSName" \
+            --output text | head -1)
+
+          if [[ -z "${ALB_DNS}" || "${ALB_DNS}" == "None" ]]; then
+            echo "Internal ALB not found, skipping Route53 update."
+            exit 0
+          fi
+
+          # ALB의 Hosted Zone ID 조회
+          ALB_HOSTED_ZONE_ID=$(aws elbv2 describe-load-balancers \
+            --region "${AWS_REGION}" \
+            --query "LoadBalancers[?DNSName=='${ALB_DNS}'].CanonicalHostedZoneId" \
+            --output text)
+
+          echo "ALB DNS: ${ALB_DNS}"
+          echo "ALB Hosted Zone ID: ${ALB_HOSTED_ZONE_ID}"
+
+          # Route53 A 레코드 (Alias) UPSERT - 없으면 생성, 있으면 덮어씀
+          aws route53 change-resource-record-sets \
+            --hosted-zone-id "${HOSTED_ZONE_ID}" \
+            --change-batch "{
+              \"Changes\": [{
+                \"Action\": \"UPSERT\",
+                \"ResourceRecordSet\": {
+                  \"Name\": \"${DOMAIN}\",
+                  \"Type\": \"A\",
+                  \"AliasTarget\": {
+                    \"HostedZoneId\": \"${ALB_HOSTED_ZONE_ID}\",
+                    \"DNSName\": \"${ALB_DNS}\",
+                    \"EvaluateTargetHealth\": true
+                  }
+                }
+              }]
+            }"
+
+          echo "Route53 updated: ${DOMAIN} -> ${ALB_DNS}"
+
+      - name: Clean up ENIs before destroy
+        if: ${{ inputs.action == 'destroy' }}
+        run: |
+          VPC_ID=$(aws ec2 describe-vpcs \
+            --region "${AWS_REGION}" \
+            --filters "Name=tag:Project,Values=sgs-hasp" \
+            --query "Vpcs[0].VpcId" \
+            --output text)
+
+          if [[ -z "${VPC_ID}" || "${VPC_ID}" == "None" ]]; then
+            echo "VPC not found, skipping ENI cleanup."
+            exit 0
+          fi
+
+          echo "Found VPC: ${VPC_ID}"
+
+          ENI_IDS=$(aws ec2 describe-network-interfaces \
+            --region "${AWS_REGION}" \
+            --filters "Name=vpc-id,Values=${VPC_ID}" \
+            --query "NetworkInterfaces[].[NetworkInterfaceId,Status,Attachment.AttachmentId]" \
+            --output text)
+
+          if [[ -z "${ENI_IDS}" || "${ENI_IDS}" == "None" ]]; then
+            echo "No ENIs found."
+            exit 0
+          fi
+
+          while IFS=$'\t' read -r ENI_ID STATUS ATTACHMENT_ID; do
+            echo "Processing ENI ${ENI_ID} (status: ${STATUS})..."
+            if [[ "${STATUS}" == "in-use" && -n "${ATTACHMENT_ID}" && "${ATTACHMENT_ID}" != "None" ]]; then
+              echo "Detaching ENI ${ENI_ID} (attachment: ${ATTACHMENT_ID})..."
+              aws ec2 detach-network-interface \
+                --region "${AWS_REGION}" \
+                --attachment-id "${ATTACHMENT_ID}" \
+                --force || true
+              sleep 3
+            fi
+            echo "Deleting ENI ${ENI_ID}..."
+            aws ec2 delete-network-interface \
+              --region "${AWS_REGION}" \
+              --network-interface-id "${ENI_ID}" || true
+          done <<< "${ENI_IDS}"
+
+      - name: Force unlock Terraform state before destroy
+        if: ${{ inputs.action == 'destroy' }}
+        run: |
+          aws s3 rm s3://sgs-hasp-tfstate/terraform/terraform.tfstate.tflock \
+            --region ap-northeast-2 || true
+
+      - name: Terraform destroy plan
+        if: ${{ inputs.action == 'destroy' }}
+        working-directory: public/terraform
+        run: terraform plan -destroy -refresh=false -out=tfdestroy
+
+      - name: Upload destroy plan artifact
+        if: ${{ inputs.action == 'destroy' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-public-terraform-destroy-plan
+          path: public/terraform/tfdestroy
+
+      - name: Terraform destroy
+        if: ${{ inputs.action == 'destroy' }}
+        working-directory: public/terraform
+        run: terraform apply -auto-approve tfdestroy

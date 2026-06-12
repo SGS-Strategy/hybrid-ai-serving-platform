@@ -2070,6 +2070,55 @@ version_minor="$1"
 
 export DEBIAN_FRONTEND=noninteractive
 
+wait_for_apt_locks() {
+  local lock
+  local busy
+  local deadline=$((SECONDS + 600))
+  local -a locks=(
+    /var/lib/dpkg/lock
+    /var/lib/dpkg/lock-frontend
+    /var/lib/apt/lists/lock
+    /var/cache/apt/archives/lock
+  )
+
+  while true; do
+    busy=0
+    if command -v fuser >/dev/null 2>&1; then
+      for lock in "${locks[@]}"; do
+        if fuser "$lock" >/dev/null 2>&1; then
+          busy=1
+          break
+        fi
+      done
+    elif pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgrade >/dev/null 2>&1; then
+      busy=1
+    fi
+
+    [[ "$busy" -eq 0 ]] && return
+    if (( SECONDS >= deadline )); then
+      echo "Timed out waiting for apt/dpkg locks" >&2
+      if command -v fuser >/dev/null 2>&1; then
+        for lock in "${locks[@]}"; do
+          fuser -v "$lock" >&2 || true
+        done
+      fi
+      ps -eo pid,comm,args | grep -E 'apt|dpkg|unattended-upgrade' >&2 || true
+      return 1
+    fi
+    echo "Waiting for apt/dpkg lock to be released..."
+    sleep 5
+  done
+}
+
+apt_get() {
+  wait_for_apt_locks
+  apt-get -o DPkg::Lock::Timeout=600 "$@"
+}
+
+if command -v cloud-init >/dev/null 2>&1; then
+  cloud-init status --wait >/dev/null 2>&1 || true
+fi
+
 swapoff -a || true
 sed -ri '/\sswap\s/s/^/#/' /etc/fstab || true
 
@@ -2087,8 +2136,8 @@ net.ipv4.ip_forward = 1
 EOF
 sysctl --system >/dev/null || true
 
-apt-get update -qq
-apt-get install -y -qq apt-transport-https ca-certificates curl gpg containerd
+apt_get update -qq
+apt_get install -y -qq apt-transport-https ca-certificates curl gpg containerd
 
 mkdir -p /etc/containerd
 containerd config default >/etc/containerd/config.toml
@@ -2104,8 +2153,9 @@ chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 cat >/etc/apt/sources.list.d/kubernetes.list <<EOF
 deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${version_minor}/deb/ /
 EOF
-apt-get update -qq
-apt-get install -y -qq kubelet kubeadm kubectl
+apt_get update -qq
+apt_get install -y -qq kubelet kubeadm kubectl
+wait_for_apt_locks
 apt-mark hold kubelet kubeadm kubectl >/dev/null
 systemctl enable kubelet
 EOS
@@ -2267,6 +2317,55 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 
+wait_for_apt_locks() {
+  local lock
+  local busy
+  local deadline=$((SECONDS + 600))
+  local -a locks=(
+    /var/lib/dpkg/lock
+    /var/lib/dpkg/lock-frontend
+    /var/lib/apt/lists/lock
+    /var/cache/apt/archives/lock
+  )
+
+  while true; do
+    busy=0
+    if command -v fuser >/dev/null 2>&1; then
+      for lock in "${locks[@]}"; do
+        if fuser "$lock" >/dev/null 2>&1; then
+          busy=1
+          break
+        fi
+      done
+    elif pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgrade >/dev/null 2>&1; then
+      busy=1
+    fi
+
+    [[ "$busy" -eq 0 ]] && return
+    if (( SECONDS >= deadline )); then
+      echo "Timed out waiting for apt/dpkg locks" >&2
+      if command -v fuser >/dev/null 2>&1; then
+        for lock in "${locks[@]}"; do
+          fuser -v "$lock" >&2 || true
+        done
+      fi
+      ps -eo pid,comm,args | grep -E 'apt|dpkg|unattended-upgrade' >&2 || true
+      return 1
+    fi
+    echo "Waiting for apt/dpkg lock to be released..."
+    sleep 5
+  done
+}
+
+apt_get() {
+  wait_for_apt_locks
+  apt-get -o DPkg::Lock::Timeout=600 "$@"
+}
+
+if command -v cloud-init >/dev/null 2>&1; then
+  cloud-init status --wait >/dev/null 2>&1 || true
+fi
+
 swapoff -a || true
 sed -ri '/\sswap\s/s/^/#/' /etc/fstab || true
 
@@ -2284,8 +2383,8 @@ net.ipv4.ip_forward = 1
 EOF
 sysctl --system >/dev/null || true
 
-apt-get update -qq
-apt-get install -y -qq apt-transport-https ca-certificates curl gpg containerd
+apt_get update -qq
+apt_get install -y -qq apt-transport-https ca-certificates curl gpg containerd
 
 mkdir -p /etc/containerd
 containerd config default >/etc/containerd/config.toml
@@ -2301,8 +2400,9 @@ chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 cat >/etc/apt/sources.list.d/kubernetes.list <<EOF
 deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${version_minor}/deb/ /
 EOF
-apt-get update -qq
-apt-get install -y -qq kubelet kubeadm kubectl
+apt_get update -qq
+apt_get install -y -qq kubelet kubeadm kubectl
+wait_for_apt_locks
 apt-mark hold kubelet kubeadm kubectl >/dev/null
 systemctl enable kubelet
 
@@ -2701,19 +2801,64 @@ install_lxd_devstack() {
   fi
 
   info "Installing local OpenStack control plane with DevStack in LXD: ${name}"
-  lxc exec "$name" -- bash -lc '
-    set -euo pipefail
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y git sudo curl ca-certificates iproute2 net-tools kmod python3-openstackclient
-    if ! id stack >/dev/null 2>&1; then
-      useradd -s /bin/bash -d /opt/stack -m stack
+  lxc exec "$name" -- bash -s <<'EOS'
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+wait_for_apt_locks() {
+  local lock
+  local busy
+  local deadline=$((SECONDS + 600))
+  local -a locks=(
+    /var/lib/dpkg/lock
+    /var/lib/dpkg/lock-frontend
+    /var/lib/apt/lists/lock
+    /var/cache/apt/archives/lock
+  )
+
+  while true; do
+    busy=0
+    if command -v fuser >/dev/null 2>&1; then
+      for lock in "${locks[@]}"; do
+        if fuser "$lock" >/dev/null 2>&1; then
+          busy=1
+          break
+        fi
+      done
+    elif pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgrade >/dev/null 2>&1; then
+      busy=1
     fi
-    chmod +x /opt/stack
-    printf "stack ALL=(ALL) NOPASSWD: ALL\n" >/etc/sudoers.d/stack
-    chmod 440 /etc/sudoers.d/stack
-    chown -R stack:stack /opt/stack
-  '
+
+    [[ "$busy" -eq 0 ]] && return
+    if (( SECONDS >= deadline )); then
+      echo "Timed out waiting for apt/dpkg locks" >&2
+      ps -eo pid,comm,args | grep -E 'apt|dpkg|unattended-upgrade' >&2 || true
+      return 1
+    fi
+    echo "Waiting for apt/dpkg lock to be released..."
+    sleep 5
+  done
+}
+
+apt_get() {
+  wait_for_apt_locks
+  apt-get -o DPkg::Lock::Timeout=600 "$@"
+}
+
+if command -v cloud-init >/dev/null 2>&1; then
+  cloud-init status --wait >/dev/null 2>&1 || true
+fi
+
+apt_get update
+apt_get install -y git sudo curl ca-certificates iproute2 net-tools kmod python3-openstackclient
+if ! id stack >/dev/null 2>&1; then
+  useradd -s /bin/bash -d /opt/stack -m stack
+fi
+chmod +x /opt/stack
+printf "stack ALL=(ALL) NOPASSWD: ALL\n" >/etc/sudoers.d/stack
+chmod 440 /etc/sudoers.d/stack
+chown -R stack:stack /opt/stack
+EOS
   configure_openstack_devstack_user_caches "$name"
   configure_openstack_persistent_storage "$name"
 

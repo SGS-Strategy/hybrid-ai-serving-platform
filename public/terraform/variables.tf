@@ -54,45 +54,81 @@ variable "msk_private_subnet_cidrs" {
   ]
 }
 
-# ECR 변수
+variable "nat_gateway_az_index" {
+  description = "Availability zone index (0=AZ-a, 1=AZ-b, 2=AZ-c) for the single NAT gateway"
+  type        = number
+  default     = 1
+}
+
+# ECR 리포지토리 변수
 variable "ecr_repositories" {
   description = "ECR repository names"
   type        = list(string)
   default = [
-    "factory-simulator",
-    "operation-simulator",
+    "predictive-model",
+    "inference-api",
+    "inference-worker",
+    "dashboard-backend",
+    "dashboard-frontend",
   ]
 }
 
 # EKS 변수
+variable "eks_public_access_cidrs" {
+  description = "CIDR blocks allowed to access the EKS public endpoint"
+  type        = list(string)
+  default = [
+    "221.150.194.220/32", # choi
+    "125.243.10.39/32",   # shin
+    "218.39.98.40/32"     # kim
+  ]
+}
+
 variable "eks_cluster_version" {
   description = "Kubernetes version for the EKS cluster"
   type        = string
   default     = "1.31"
 }
 
-variable "eks_node_instance_types" {
-  description = "Instance types for the EKS managed node group"
-  type        = list(string)
-  default     = ["t3.medium"]
-}
-
-variable "eks_node_desired_size" {
-  description = "Desired number of nodes in the EKS managed node group"
-  type        = number
-  default     = 2
-}
-
-variable "eks_node_min_size" {
-  description = "Minimum number of nodes in the EKS managed node group"
-  type        = number
-  default     = 1
-}
-
-variable "eks_node_max_size" {
-  description = "Maximum number of nodes in the EKS managed node group"
-  type        = number
-  default     = 3
+variable "eks_node_groups" {
+  description = "Per-workload EKS managed node group configuration"
+  type = map(object({
+    instance_types = list(string)
+    az_count       = number # how many AZs to span (1..3); subnets are taken from eks_private in order
+    desired_size   = number
+    min_size       = number
+    max_size       = number
+    labels         = map(string)
+    taints = list(object({
+      key    = string
+      value  = string
+      effect = string
+    }))
+  }))
+  default = {
+    inference = {
+      instance_types = ["t3.medium"] # 임시 비용 절감, 원래 값: m7i-flex.large (t3.small은 최대 파드 11개 한계로 변경)
+      az_count       = 3
+      desired_size   = 1 # ★ 원래 값 : 2 (나중에 복구) ★
+      min_size       = 1
+      max_size       = 10
+      labels         = { workload = "inference" }
+      taints         = []
+    }
+    general = {
+      # system(ArgoCD, KEDA, cert-manager) + monitoring(Prometheus, Grafana, Loki) + app(dashboard) 통합
+      # KEDA(제어부)와 inference(실행부) 장애 전파 격리 목적
+      # ★ 운영 전환 시: m7i-flex.large × 2 (8GB × 2, 비용 동일 + HA 확보)
+      # ★   → instance_types = ["m7i-flex.large"], desired_size = 2, min_size = 2
+      instance_types = ["m7i-flex.xlarge"] # 데모: 4vCPU / 16GB — general 워크로드 전체 수용
+      az_count       = 2
+      desired_size   = 1
+      min_size       = 1
+      max_size       = 5
+      labels         = { workload = "general" }
+      taints         = []
+    }
+  }
 }
 
 # MSK 변수
@@ -105,19 +141,51 @@ variable "msk_kafka_version" {
 variable "msk_broker_instance_type" {
   description = "Broker instance type for the MSK cluster"
   type        = string
-  default     = "kafka.t3.small"
+  # NOTE: AWS MSK는 t3 계열 중 kafka.t3.small만 지원 (kafka.t3.medium 등 없음).
+  # 더 안정적인 네트워크가 필요하면 kafka.m5.large 이상으로 상향할 것.
+  default = "kafka.t3.small"
 }
 
 variable "msk_number_of_broker_nodes" {
   description = "Number of broker nodes for the MSK cluster"
   type        = number
-  default     = 3
+  default     = 2 # 임시 비용 절감 (서브넷 2개 최소 요구사항 맞춤), 원래 값: 3 (나중에 복구)
 }
 
 variable "msk_ebs_volume_size" {
   description = "Broker EBS volume size in GiB for the MSK cluster"
   type        = number
-  default     = 1000
+  default     = 100 # ★ 원래 값: 1000 GiB (나중에 복구) ★
+}
+
+variable "manage_msk_topics" {
+  description = "Whether Terraform should reconcile MSK topics through the AWS Kafka topic API"
+  type        = bool
+  default     = true
+}
+
+variable "msk_topic_replication_factor" {
+  description = "Replication factor to use when creating MSK topics"
+  type        = number
+  default     = 1 # ★ 원래 값: 3 (나중에 복구) ★
+}
+
+variable "msk_topic_configs" {
+  description = "Topic-level MSK configuration properties to apply when creating or updating topics"
+  type        = map(string)
+  default = {
+    "min.insync.replicas" = "1" # ★ 원래 값: 2 (나중에 복구) ★
+  }
+}
+
+variable "msk_topics" {
+  description = "MSK topic names mapped to their desired partition counts"
+  type        = map(number)
+  default = {
+    inference-request = 6
+    inference-retry   = 3
+    inference-dlq     = 1
+  }
 }
 
 # S3 변수
@@ -134,47 +202,60 @@ variable "artifacts_s3_force_destroy" {
 }
 
 # ALB 변수
-variable "internal_alb_deletion_protection" {
-  description = "Whether to enable deletion protection for the internal ALB"
-  type        = bool
-  default     = false
+variable "private_cloud_cidrs" {
+  description = "Private Cloud 사이트 CIDR (VPCE 경유로 ECR/S3/STS 등 AWS 서비스 접근 허용)"
+  type        = list(string)
+  default     = []
 }
 
-variable "internal_alb_target_port" {
-  description = "Target port for the internal ALB target group"
-  type        = number
-  default     = 80
+variable "edge_network_cidrs" {
+  description = "Edge(공장) 사이트 CIDR (VPN 경유로 Internal ALB 접근 허용)"
+  type        = list(string)
+  default     = []
 }
 
-variable "internal_alb_target_type" {
-  description = "Target type for the internal ALB target group"
+# SES 변수
+variable "ses_alert_sender_email" {
+  description = "이상 감지 알림 발신자 이메일 (SES에 등록되어야 함)"
   type        = string
-  default     = "ip"
+  default     = "pswk0907@gmail.com"
 }
 
-variable "internal_alb_health_check_path" {
-  description = "Health check path for the internal ALB target group"
+# 실제 고객사 이메일로 교체
+variable "ses_alert_recipient_email" {
+  description = "이상 감지 알림 수신자 이메일 (고객사 담당자)"
   type        = string
-  default     = "/"
+  default     = "pswk0907@gmail.com"
 }
 
 # VPN 변수
+variable "argocd_chart_version" {
+  description = "Argo CD Helm chart version"
+  type        = string
+  default     = "7.8.23"
+}
+
+variable "additional_eks_admin_role_arns" {
+  description = "Additional IAM role ARNs that should receive EKS cluster admin access"
+  type        = list(string)
+  default = [
+    "arn:aws:iam::808379768010:role/kt_sgs_platform_admin_role",
+  ]
+}
+
 variable "enable_site_to_site_vpn" {
   description = "Whether to create the Site-to-Site VPN resources"
   type        = bool
-  default     = false
+  default     = true
 }
 
-variable "customer_gateway_ip" {
-  description = "Public IP address of the customer gateway device"
-  type        = string
-  default     = ""
-}
-
-variable "customer_gateway_bgp_asn" {
-  description = "BGP ASN for the customer gateway"
-  type        = number
-  default     = 65000
+variable "customer_gateways" {
+  description = "Map of customer gateways keyed by site name"
+  type = map(object({
+    ip      = string
+    bgp_asn = number
+  }))
+  default = {}
 }
 
 variable "vpn_static_routes_only" {
@@ -184,7 +265,7 @@ variable "vpn_static_routes_only" {
 }
 
 variable "vpn_static_route_cidrs" {
-  description = "Static route CIDR blocks for the Site-to-Site VPN connection"
-  type        = list(string)
-  default     = []
+  description = "Static route CIDR blocks per site for the Site-to-Site VPN connections"
+  type        = map(list(string))
+  default     = {}
 }

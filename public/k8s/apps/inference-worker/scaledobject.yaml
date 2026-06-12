@@ -1,0 +1,20 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: inference-worker
+  namespace: inference
+spec:
+  scaleTargetRef:
+    name: inference-worker
+  minReplicaCount: 2
+  maxReplicaCount: 6  # inference-request 토픽 파티션 수와 동일 (파티션 수 이상 늘려도 의미 없음)
+  cooldownPeriod: 60
+  triggers:
+    - type: kafka
+      metadata:
+        consumerGroup: inference-worker-group
+        topic: inference-request
+        lagThreshold: "10"  # 파티션당 랙이 10 이상이면 스케일 업
+        offsetResetPolicy: latest
+      authenticationRef:
+        name: inference-kafka-auth

@@ -1,0 +1,10 @@
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: inference-kafka-auth
+  namespace: inference
+spec:
+  configMapTargetRef:
+    - parameter: bootstrapServers
+      name: inference-config
+      key: BOOTSTRAP_SERVERS

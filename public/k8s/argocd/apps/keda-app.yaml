@@ -1,0 +1,40 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: keda
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://kedacore.github.io/charts
+    chart: keda
+    targetRevision: 2.19.0
+    helm:
+      releaseName: keda
+      valuesObject:
+        nodeSelector:
+          workload: general
+        # HA 설정: KEDA 중단 시 inference 오토스케일링 전체 멈춤 방지
+        replicaCount: 2
+        priorityClassName: keda-critical
+        affinity:
+          podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: keda-operator
+                topologyKey: kubernetes.io/hostname
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: keda
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # CRD annotations exceed the client-side apply limit, so sync KEDA with server-side apply.
+      - ServerSideApply=true
+

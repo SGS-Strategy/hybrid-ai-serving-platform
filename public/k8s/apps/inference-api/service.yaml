@@ -1,0 +1,13 @@
+# HTTP로 접근해야 함
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-api
+  namespace: inference
+spec:
+  selector:
+    app: inference-api
+  ports:
+    - port: 80
+      targetPort: 8080
