@@ -1,4 +1,3 @@
-# .gitlab-ci.yml
 stages:
   - build-base
   - build-train
@@ -12,8 +11,8 @@ variables:
   BASE_IMAGE_NAME: "base"           
   TRAIN_IMAGE_NAME: "train"         
   AWS_REGION: "ap-northeast-2"
-  ECR_ENDPOINT: "ECR_ENDPOINT_PLACEHOLDER"
-  ECR_API_URI: "ECR_ENDPOINT_PLACEHOLDER/inference-api"
+  ECR_ENDPOINT: "808379768010.dkr.ecr.ap-northeast-2.amazonaws.com/"
+  ECR_API_URI: "808379768010.dkr.ecr.ap-northeast-2.amazonaws.com/predictive-model"
   MINIO_ENDPOINT: "http://minio-api.minio-tenant.svc.cluster.local:9000"
 
 before_script:
@@ -25,7 +24,8 @@ before_script:
 build-base-image:
   stage: build-base
   image:
-    name: harbor.intp.me/library/kaniko-executor:debug
+    # 🔗 [수정] docker-hub 뒤에 library/를 강제 명시하여 도커허브 공식 리포지토리 매핑 성공 유도
+    name: harbor.intp.me/docker-hub/library/kaniko-project/executor:debug
     entrypoint: [""]
   script:
     - |
@@ -54,7 +54,8 @@ build-base-image:
 build-serving-image:
   stage: build-train
   image:
-    name: harbor.intp.me/library/kaniko-executor:debug
+    # 🔗 [수정] 서빙 이미지 빌더용 Kaniko 엔진 경로도 동일하게 library/ 구조로 정정
+    name: harbor.intp.me/docker-hub/library/kaniko-project/executor:debug
     entrypoint: [""]
   script:
     - |
