@@ -54,7 +54,7 @@ resource "aws_security_group" "resolver_inbound" {
       from_port   = 53
       to_port     = 53
       protocol    = "udp"
-      cidr_blocks = concat(var.private_cloud_cidrs, var.edge_network_cidrs)
+      cidr_blocks = concat(var.edge_network_cidrs, var.private_cloud_cidrs)
     }
   }
 
