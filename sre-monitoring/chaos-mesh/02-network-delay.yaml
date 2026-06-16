@@ -39,9 +39,9 @@ spec:
 
   selector:
     namespaces:
-      - default                # 교체: 실제 namespace
+      - inference
     labelSelectors:
-      app: inference-worker    # 교체: 실제 라벨
+      app: inference-worker
 
   delay:
     latency: "200ms"           # 기본 지연 (Consumer Lag 발생 유도)
