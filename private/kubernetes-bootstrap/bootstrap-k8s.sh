@@ -163,6 +163,7 @@ for output_name, role in (
     ("control_plane_nodes", "control-plane"),
     ("build_worker_nodes", "build-worker"),
     ("gpu_worker_nodes", "gpu-worker"),
+    ("harbor_nodes", "harbor"),
 ):
     for node in nodes(output_name):
         ip = target_ip(node)
@@ -764,6 +765,9 @@ label_nodes() {
         ssh_node "$host" "sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf label node '${NODE_NAMES[$index]}' hybrid-ai.io/node-role=gpu-worker hybrid-ai.io/accelerator=nvidia node-role.kubernetes.io/gpu-worker=true --overwrite >/dev/null"
         ssh_node "$host" "sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf taint node '${NODE_NAMES[$index]}' nvidia.com/gpu=true:NoSchedule --overwrite >/dev/null"
         ;;
+      harbor)
+        ssh_node "$host" "sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf label node '${NODE_NAMES[$index]}' hybrid-ai.io/node-role=harbor node-role.kubernetes.io/harbor=true --overwrite >/dev/null"
+        ;;
     esac
   done
 }
@@ -884,7 +888,7 @@ main() {
       control-plane)
         needs_control_plane_join=1
         ;;
-      build-worker|gpu-worker)
+      build-worker|gpu-worker|harbor)
         needs_worker_join=1
         ;;
     esac
@@ -913,7 +917,7 @@ main() {
   for index in "${!NODE_ROLES[@]}"; do
     [[ "$index" != "$first_index" ]] || continue
     case "${NODE_ROLES[$index]}" in
-      build-worker|gpu-worker)
+      build-worker|gpu-worker|harbor)
         ( join_k8s_worker_index "$index" "$server_target_ip" "$worker_join_command" ) &
         worker_pids+=("$!")
         ;;

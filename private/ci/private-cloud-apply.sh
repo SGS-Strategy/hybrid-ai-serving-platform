@@ -3098,7 +3098,7 @@ import json
 import sys
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
     data = json.load(handle)
-for key in ("control_plane_nodes", "build_worker_nodes", "gpu_worker_nodes"):
+for key in ("control_plane_nodes", "build_worker_nodes", "gpu_worker_nodes", "harbor_nodes"):
     for node in data.get(key, {}).get("value", []):
         ip = node.get("private_ip") or node.get("floating_ip")
         if ip:
