@@ -163,6 +163,7 @@ metadata:
     app.kubernetes.io/part-of: hybrid-ai-serving-platform
 spec:
   entrypoint: model-package
+  onExit: trigger-gitlab-ecr-sync
   serviceAccountName: model-build-workflow
   podGC:
     strategy: OnWorkflowCompletion
@@ -183,13 +184,19 @@ spec:
       - name: harbor_project
         value: models
       - name: image_name
-        value: predictor-image
+        value: predictive-model
       - name: image_tag
         value: "{{workflow.name}}"
       - name: dockerfile_path
         value: Dockerfile.predictor
       - name: context_subdir
         value: "."
+      - name: gitlab_url
+        value: https://gitlab.intp.me
+      - name: gitlab_project_id
+        value: "1"
+      - name: gitlab_ref
+        value: main
   volumes:
     - name: workspace
       persistentVolumeClaim:
@@ -203,6 +210,18 @@ spec:
         items:
           - key: .dockerconfigjson
             path: config.json
+    - name: harbor-ca
+      secret:
+        secretName: harbor-tls-ca
+        items:
+          - key: ca.crt
+            path: ca.crt
+    - name: gitlab-ca
+      secret:
+        secretName: gitlab-tls-ca
+        items:
+          - key: ca.crt
+            path: ca.crt
   templates:
     - name: model-package
       dag:
@@ -286,9 +305,46 @@ spec:
           - --destination={{workflow.parameters.harbor_registry}}/{{workflow.parameters.harbor_project}}/{{workflow.parameters.image_name}}:{{workflow.parameters.image_tag}}
           - --cache=true
           - --cache-repo={{workflow.parameters.harbor_registry}}/infra/kaniko-cache
+          - --registry-certificate={{workflow.parameters.harbor_registry}}=/kaniko/certs/ca.crt
           - --snapshot-mode=redo
         volumeMounts:
           - name: workspace
             mountPath: /workspace
           - name: kaniko-docker-config
             mountPath: /kaniko/.docker
+          - name: harbor-ca
+            mountPath: /kaniko/certs
+            readOnly: true
+
+    - name: trigger-gitlab-ecr-sync
+      container:
+        image: harbor.intp.me/docker-hub/curlimages/curl:latest
+        command: [sh, -lc]
+        env:
+          - name: GITLAB_TRIGGER_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: gitlab-pipeline-trigger
+                key: token
+                optional: true
+        args:
+          - |
+            set -eu
+            if [ "{{workflow.status}}" != "Succeeded" ]; then
+              echo "skip GitLab ECR sync trigger: workflow status={{workflow.status}}"
+              exit 0
+            fi
+            : "${GITLAB_TRIGGER_TOKEN:?missing gitlab-pipeline-trigger token}"
+            test -s /etc/gitlab/ca.crt
+            curl --fail-with-body --show-error --silent \
+              --cacert /etc/gitlab/ca.crt \
+              --request POST \
+              --form "token=${GITLAB_TRIGGER_TOKEN}" \
+              --form "ref={{workflow.parameters.gitlab_ref}}" \
+              --form "variables[IMAGE_TAG]={{workflow.parameters.image_tag}}" \
+              --form "variables[ARGO_WORKFLOW_NAME]={{workflow.name}}" \
+              "{{workflow.parameters.gitlab_url}}/api/v4/projects/{{workflow.parameters.gitlab_project_id}}/trigger/pipeline"
+        volumeMounts:
+          - name: gitlab-ca
+            mountPath: /etc/gitlab
+            readOnly: true

@@ -196,6 +196,8 @@ HARBOR_HTTP_PORT="${HARBOR_HTTP_PORT:-80}"
 HARBOR_UPSTREAM_PORT="${HARBOR_UPSTREAM_PORT:-18084}"
 HARBOR_BOOTSTRAP_WAIT_SECONDS="${HARBOR_BOOTSTRAP_WAIT_SECONDS:-1800}"
 HARBOR_ADMIN_PASSWORD="${HARBOR_ADMIN_PASSWORD:-}"
+HARBOR_CA_CERT="${HARBOR_CA_CERT:-}"
+GITLAB_PIPELINE_TRIGGER_TOKEN="${GITLAB_PIPELINE_TRIGGER_TOKEN:-}"
 MINIO_DOMAIN="${MINIO_DOMAIN:-minio.${PRIVATE_CLOUD_BASE_DOMAIN}}"
 MINIO_CONSOLE_DOMAIN="${MINIO_CONSOLE_DOMAIN:-minio-console.${PRIVATE_CLOUD_BASE_DOMAIN}}"
 MINIO_API_NODEPORT="${MINIO_API_NODEPORT:-30900}"
@@ -3894,6 +3896,52 @@ print(f"HARBOR_ROBOT_TOKEN={shlex.quote(token)}")
 PY
 }
 
+apply_ca_secret() {
+  local namespace="$1"
+  local secret_name="$2"
+  local cert_value="$3"
+  [[ -n "${cert_value}" ]] || return 0
+
+  local cert_file
+  cert_file="$(mktemp)"
+  if [[ -f "${cert_value}" ]]; then
+    cp "${cert_value}" "${cert_file}"
+  else
+    printf '%s\n' "${cert_value}" >"${cert_file}"
+  fi
+
+  kubectl create namespace "${namespace}" --dry-run=client -o yaml | kubectl apply -f -
+  kubectl -n "${namespace}" create secret generic "${secret_name}" \
+    --from-file=ca.crt="${cert_file}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  rm -f "${cert_file}"
+}
+
+apply_literal_secret() {
+  local namespace="$1"
+  local secret_name="$2"
+  local key="$3"
+  local value="$4"
+  [[ -n "${value}" ]] || return 0
+
+  kubectl create namespace "${namespace}" --dry-run=client -o yaml | kubectl apply -f -
+  kubectl -n "${namespace}" create secret generic "${secret_name}" \
+    --from-literal="${key}=${value}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+}
+
+apply_harbor_registry_secret() {
+  local namespace="$1"
+  local secret_name="$2"
+
+  kubectl create namespace "${namespace}" --dry-run=client -o yaml | kubectl apply -f -
+  kubectl -n "${namespace}" create secret docker-registry "${secret_name}" \
+    --docker-server="${HARBOR_REGISTRY_SERVER}" \
+    --docker-username="${HARBOR_ROBOT_USERNAME}" \
+    --docker-password="${HARBOR_ROBOT_TOKEN}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+}
+
 setup_model_build_platform() {
   ensure_openstack_private_route
   start_kubectl_tunnel
@@ -3917,15 +3965,18 @@ setup_model_build_platform() {
   if [[ -f "${robot_env}" ]]; then
     # shellcheck disable=SC1090
     source "${robot_env}"
-    kubectl create namespace model-build --dry-run=client -o yaml | kubectl apply -f -
-    kubectl -n model-build create secret docker-registry harbor-kaniko-push \
-      --docker-server="${HARBOR_REGISTRY_SERVER}" \
-      --docker-username="${HARBOR_ROBOT_USERNAME}" \
-      --docker-password="${HARBOR_ROBOT_TOKEN}" \
-      --dry-run=client -o yaml | kubectl apply -f -
+    apply_harbor_registry_secret model-build harbor-kaniko-push
+    apply_harbor_registry_secret default harbor-docker-secret
+    apply_harbor_registry_secret default harbor-secret
   else
     echo "warning: harbor robot credentials not found (${robot_env}); skipping harbor-kaniko-push secret" >&2
   fi
+  apply_ca_secret model-build harbor-tls-ca "${HARBOR_CA_CERT}"
+  apply_ca_secret model-build gitlab-tls-ca "${HARBOR_CA_CERT}"
+  apply_ca_secret default harbor-tls-ca "${HARBOR_CA_CERT}"
+  apply_ca_secret default gitlab-tls-ca "${HARBOR_CA_CERT}"
+  apply_literal_secret model-build gitlab-pipeline-trigger token "${GITLAB_PIPELINE_TRIGGER_TOKEN}"
+  apply_literal_secret default gitlab-pipeline-trigger token "${GITLAB_PIPELINE_TRIGGER_TOKEN}"
   if [[ "${ARGO_WORKFLOWS_INSTALL_ENABLED}" == "true" ]]; then
     kubectl create namespace argo --dry-run=client -o yaml | kubectl apply -f -
     kubectl apply -n argo -f "${ARGO_WORKFLOWS_INSTALL_MANIFEST}"
