@@ -398,6 +398,34 @@ apt_get install -y -qq apt-transport-https ca-certificates curl gpg containerd
 mkdir -p /etc/containerd
 containerd config default >/etc/containerd/config.toml
 sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml || true
+if command -v nvidia-container-runtime >/dev/null 2>&1; then
+  mkdir -p /etc/containerd/conf.d
+  if grep -q 'io.containerd.cri.v1.runtime' /etc/containerd/config.toml; then
+    cat >/etc/containerd/conf.d/99-nvidia.toml <<'EOF'
+version = 3
+
+[plugins."io.containerd.cri.v1.runtime".containerd.runtimes.nvidia]
+  runtime_type = "io.containerd.runc.v2"
+  privileged_without_host_devices = false
+
+  [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.nvidia.options]
+    BinaryName = "/usr/bin/nvidia-container-runtime"
+    SystemdCgroup = true
+EOF
+  else
+    cat >/etc/containerd/conf.d/99-nvidia.toml <<'EOF'
+version = 2
+
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia]
+  runtime_type = "io.containerd.runc.v2"
+  privileged_without_host_devices = false
+
+  [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia.options]
+    BinaryName = "/usr/bin/nvidia-container-runtime"
+    SystemdCgroup = true
+EOF
+  fi
+fi
 systemctl enable --now containerd
 systemctl restart containerd
 

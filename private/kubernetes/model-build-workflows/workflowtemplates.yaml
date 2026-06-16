@@ -20,7 +20,7 @@ spec:
       - name: git_ref
         value: main
       - name: training_image
-        value: pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
+        value: pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime
       - name: train_command
         value: python model_build.py --data ../data --output ../output
       - name: dataset_bucket
@@ -98,6 +98,7 @@ spec:
             mountPath: /workspace
 
     - name: train
+      runtimeClassName: nvidia
       nodeSelector:
         hybrid-ai.io/node-role: gpu-worker
       tolerations:
