@@ -823,7 +823,7 @@ wait_for_kubernetes() {
 
   wait_for_kubernetes_api "$host"
   ssh_node "$host" 'sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf wait --for=condition=Ready nodes --all --timeout=300s'
-  ssh_node "$host" 'if sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get pods -n kube-system --no-headers 2>/dev/null | grep -q .; then sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf wait --for=condition=Ready pods --all -n kube-system --timeout=300s; fi'
+  ssh_node "$host" 'running_pods="$(sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get pods -n kube-system --field-selector=status.phase=Running -o name 2>/dev/null || true)"; if [[ -n "$running_pods" ]]; then sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf wait --for=condition=Ready -n kube-system --timeout=300s $running_pods; fi'
 }
 
 wait_for_kubernetes_api() {
