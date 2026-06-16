@@ -3361,6 +3361,22 @@ bootstrap_k8s() {
   kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=600s
   kubectl -n kube-system rollout status deployment/coredns --timeout=600s
   kubectl apply -k "${ROOT}/private/kubernetes"
+  apply_gpu_worker_resources
+}
+
+apply_gpu_worker_resources() {
+  local gpu_node_count
+  gpu_node_count="$(kubectl get nodes -l hybrid-ai.io/accelerator=nvidia --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')"
+  if [[ "${gpu_node_count}" == "0" ]]; then
+    log "skipping GPU worker resources; no NVIDIA GPU node labels found"
+    return 0
+  fi
+
+  kubectl apply -k "${ROOT}/private/gpu-worker"
+  kubectl -n kube-system rollout status daemonset/nvidia-device-plugin-daemonset --timeout=600s
+  kubectl -n kube-system rollout status daemonset/gpu-image-prepuller --timeout=900s
+  kubectl get nodes -l hybrid-ai.io/accelerator=nvidia \
+    -o jsonpath='{range .items[*]}{.metadata.name}{" nvidia.com/gpu capacity="}{.status.capacity.nvidia\.com/gpu}{" allocatable="}{.status.allocatable.nvidia\.com/gpu}{"\n"}{end}'
 }
 
 storage_inputs_env() {
@@ -3883,6 +3899,7 @@ setup_model_build_platform() {
   start_kubectl_tunnel
   export KUBECONFIG="${KUBECONFIG_PATH}"
   kubectl apply -k "${ROOT}/private/kubernetes"
+  apply_gpu_worker_resources
 
   # Create the Harbor kaniko pull/push secret from credentials saved by the
   # registry phase (setup_harbor). Done here because this is where the cluster
