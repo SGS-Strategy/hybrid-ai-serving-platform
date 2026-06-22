@@ -1,3 +1,5 @@
+# 앱 배포 전에 namespace 같은 공통 base 리소스를 먼저 sync하는 Argo CD 애플리케이션
+
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
