@@ -1715,6 +1715,10 @@ CLEANUP_OPENSTACK_ORPHANS_BEFORE_APPLY
 }
 
 preflight_openstack_quota() {
+  if [[ "${HA_OPENSTACK_PROVIDER}" == "kolla" ]]; then
+    log "skip quota preflight: Kolla provider (기존 VM reconciled, 쿼터 충족)"
+    return 0
+  fi
   local prefix control_count build_count gpu_count gitlab_count harbor_count
   local control_flavor build_flavor gpu_flavor gitlab_flavor harbor_flavor
 
@@ -1960,6 +1964,10 @@ PREFLIGHT_OPENSTACK_QUOTA
 }
 
 preflight_host_capacity() {
+  if [[ "${HA_OPENSTACK_PROVIDER}" == "kolla" ]]; then
+    log "skip host capacity preflight: Kolla provider (bare-metal nova, DevStack 컨테이너 없음)"
+    return 0
+  fi
   local apply_prefix="$1"
   local control_count="$2"
   local control_flavor="$3"
@@ -2918,6 +2926,26 @@ devstack_openrc_password() {
 }
 
 use_local_devstack_openstack_env() {
+  if [[ "${HA_OPENSTACK_PROVIDER}" == "kolla" ]]; then
+    # Kolla Keystone 인증: admin-openrc(URL/project/domains/admin) 기반 + keystone v3 보장
+    set +u
+    # shellcheck disable=SC1090
+    . "${HA_KOLLA_ADMIN_OPENRC}" >/dev/null 2>&1 || true
+    set -u
+    [[ -n "${OS_AUTH_URL:-}" ]] || export OS_AUTH_URL="http://192.168.0.250:5000"
+    [[ "${OS_AUTH_URL}" == */v3 ]] || export OS_AUTH_URL="${OS_AUTH_URL%/}/v3"
+    # CI 로그인 자격(3stacks 등)이 제공되면 우선 적용
+    if [[ "${HA_OPENSTACK_LOGIN_PASSWORD_INPUT_PROVIDED:-false}" == "true" ]]; then
+      export OS_USERNAME="${HA_OPENSTACK_LOGIN_USERNAME:-${OS_USERNAME:-3stacks}}"
+      export OS_PASSWORD="${HA_OPENSTACK_LOGIN_PASSWORD}"
+      export OS_PROJECT_NAME="${HA_OPENSTACK_LOGIN_PROJECT_NAME:-${OS_PROJECT_NAME:-admin}}"
+      export OS_USER_DOMAIN_NAME="${HA_OPENSTACK_LOGIN_USER_DOMAIN_NAME:-${OS_USER_DOMAIN_NAME:-Default}}"
+      export OS_PROJECT_DOMAIN_NAME="${HA_OPENSTACK_LOGIN_PROJECT_DOMAIN_NAME:-${OS_PROJECT_DOMAIN_NAME:-Default}}"
+    fi
+    export OS_REGION_NAME="${OS_REGION_NAME:-RegionOne}"
+    export OS_IDENTITY_API_VERSION=3
+    return
+  fi
   export OS_AUTH_URL="${HA_DEVSTACK_AUTH_URL:-http://127.0.0.1:18081/identity/v3}"
   export OS_USERNAME="${HA_OPENSTACK_LOGIN_USERNAME:-${HA_DEVSTACK_USERNAME:-admin}}"
   local devstack_password
