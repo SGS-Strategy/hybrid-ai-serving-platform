@@ -204,9 +204,5 @@ output "vpn_local_vpc_cidr" {
   value       = var.vpc_cidr
 }
 
-# Route 53 Resolver outputs
-# 비활성화됨 - route53_resolver.tf 참고
-# output "inbound_resolver_ips" {
-#   description = "Inbound Route 53 Resolver IPs for forwarding *.amazonaws.com and private hosted zones"
-#   value       = [for ip in aws_route53_resolver_endpoint.inbound.ip_address : ip.ip]
-# }
+# Route 53 Resolver output is defined in route53.tf because the endpoint lives
+# there. Private cloud DNS forwarding consumes resolver_inbound_ips.
