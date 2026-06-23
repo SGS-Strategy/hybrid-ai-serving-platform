@@ -31,7 +31,7 @@ SSH_USER="${HA_OPENSTACK_SSH_USER:-ubuntu}"
 SSH_KEY="${HA_OPENSTACK_SSH_KEY:-${ROOT}/.ha/ssh/hybrid-ai-private-admin}"
 SSH_TARGET="${HA_OPENSTACK_SSH_TARGET:-auto}"
 SSH_PROXY_CONTAINER="${HA_OPENSTACK_SSH_PROXY_CONTAINER:-}"
-SSH_PROXY_NETNS="${HA_OPENSTACK_SSH_PROXY_NETNS:-}"
+SSH_PROXY_NETNS_NC="${HA_OPENSTACK_SSH_PROXY_NETNS_NC:-}"
 K8S_VERSION_MINOR="${HA_K8S_VERSION_MINOR:-v1.36}"
 K8S_POD_CIDR="${HA_K8S_POD_CIDR:-192.168.0.0/16}"
 K8S_CNI_MANIFEST="${HA_K8S_CNI_MANIFEST:-https://raw.githubusercontent.com/projectcalico/calico/v3.32.0/manifests/calico.yaml}"
@@ -102,9 +102,9 @@ ssh_options() {
     -o "UserKnownHostsFile=${known_hosts}" \
     -i "$SSH_KEY"
 
-  if [[ -n "$SSH_PROXY_NETNS" ]]; then
-    # Kolla: neutron qdhcp netns 경유로 tenant VM 도달
-    printf '%s\n' -o "ProxyCommand=sudo ip netns exec ${SSH_PROXY_NETNS} nc %h %p"
+  if [[ -n "$SSH_PROXY_NETNS_NC" ]]; then
+    # Kolla: qdhcp netns nc 래퍼 경유 (좁은 NOPASSWD sudoers)
+    printf '%s\n' -o "ProxyCommand=sudo ${SSH_PROXY_NETNS_NC} %h %p"
   elif [[ -n "$SSH_PROXY_CONTAINER" ]]; then
     printf '%s\n' -o "ProxyCommand=lxc exec ${SSH_PROXY_CONTAINER} -- nc %h %p"
   fi

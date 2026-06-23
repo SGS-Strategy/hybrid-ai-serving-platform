@@ -97,6 +97,8 @@ HA_OPENSTACK_PROVIDER="${HA_OPENSTACK_PROVIDER:-$([ -f /etc/kolla/globals.yml ] 
 HA_KOLLA_VENV="${HA_KOLLA_VENV:-${HOME}/.ha/kolla-venv}"
 HA_KOLLA_DEPLOY_SCRIPT="${HA_KOLLA_DEPLOY_SCRIPT:-${ROOT}/private/openstack-kolla/deploy-kolla.sh}"
 HA_KOLLA_ADMIN_OPENRC="${HA_KOLLA_ADMIN_OPENRC:-/etc/kolla/admin-openrc.sh}"
+# tenant VM ProxyCommand용 nc 래퍼 (qdhcp netns 안에서 nc만 실행, 좁은 NOPASSWD sudoers와 함께)
+HA_KOLLA_NETNS_NC="${HA_KOLLA_NETNS_NC:-/usr/local/sbin/ha-netns-nc}"
 
 PRIVATE_CLOUD_BASE_DOMAIN="${PRIVATE_CLOUD_BASE_DOMAIN:-${HA_BASE_DOMAIN:-intp.me}}"
 OS_PASSWORD_INPUT_PROVIDED=false
@@ -376,11 +378,8 @@ write_ssh_config() {
   local tmp_config proxy_cmd
   ensure_ssh_key
   if [[ "${HA_OPENSTACK_PROVIDER}" == "kolla" ]]; then
-    # Kolla: tenant VM은 neutron qdhcp netns 경유로 도달 (DevStack lxc 컨테이너 대체)
-    local netns
-    netns="$(ip netns list 2>/dev/null | grep -oE 'qdhcp-[0-9a-f-]+' | head -1)"
-    [[ -n "${netns}" ]] || { echo "qdhcp netns 없음 — tenant 네트워크 확인" >&2; return 1; }
-    proxy_cmd="sudo ip netns exec ${netns} nc %%h %%p"
+    # Kolla: tenant VM은 qdhcp netns nc 래퍼 경유 (DevStack lxc 대체, 좁은 NOPASSWD sudoers)
+    proxy_cmd="sudo ${HA_KOLLA_NETNS_NC} %%h %%p"
   else
     proxy_cmd="lxc exec ha-openstack -- nc %%h %%p"
   fi
@@ -3470,8 +3469,8 @@ bootstrap_k8s() {
   export HA_OPENSTACK_TF_OUTPUT_JSON="${TF_OUTPUT_JSON}"
   export HA_OPENSTACK_SSH_KEY="${SSH_KEY}"
   if [[ "${HA_OPENSTACK_PROVIDER}" == "kolla" ]]; then
-    # Kolla: tenant VM은 neutron qdhcp netns 경유 (DevStack lxc 컨테이너 대체)
-    export HA_OPENSTACK_SSH_PROXY_NETNS="$(ip netns list 2>/dev/null | grep -oE 'qdhcp-[0-9a-f-]+' | head -1)"
+    # Kolla: tenant VM은 qdhcp netns nc 래퍼 경유 (DevStack lxc 대체)
+    export HA_OPENSTACK_SSH_PROXY_NETNS_NC="${HA_KOLLA_NETNS_NC}"
   else
     export HA_OPENSTACK_SSH_PROXY_CONTAINER="ha-openstack"
   fi
