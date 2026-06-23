@@ -217,7 +217,7 @@ output "vpn_local_vpc_cidr" {
 # }
 
 output "dlq_alert_lambda_name" {
-  description = "Lambda function name for direct DLQ Slack webhook delivery"
+  description = "Lambda function name for the inference incident copilot webhook delivery"
   value       = local.enable_dlq_alert_webhook ? aws_lambda_function.dlq_alarm[0].function_name : null
   sensitive   = true
 }

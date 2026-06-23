@@ -288,3 +288,9 @@ variable "dlq_alert_topic_name" {
   type        = string
   default     = "inference-dlq"
 }
+
+variable "incident_copilot_bedrock_model_id" {
+  description = "Amazon Bedrock model ID used by the inference incident copilot Lambda"
+  type        = string
+  default     = "anthropic.claude-3-haiku-20240307-v1:0"
+}
