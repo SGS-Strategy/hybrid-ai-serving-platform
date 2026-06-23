@@ -15,6 +15,7 @@ on:
 
 permissions:
   id-token: write
+  contents: write
 
 env:
   AWS_REGION: ap-northeast-2
@@ -446,12 +447,8 @@ jobs:
             --query 'StandardOutputContent' \
             --output text || true
 
-      - name: Patch runtime Kubernetes annotations
-        if: ${{ inputs.action == 'apply' && steps.resolve_instance.outputs.value != '' }}
-        id: patch_runtime_annotations
-        env:
-          TARGET_INSTANCE_ID: ${{ steps.resolve_instance.outputs.value }}
-          BOOTSTRAP_ROLE_ARN: ${{ steps.bootstrap_role.outputs.value }}
+      - name: Write runtime values into Git manifests
+        if: ${{ inputs.action == 'apply' }}
         working-directory: public/terraform
         run: |
           export INFERENCE_WORKER_ROLE_ARN="$(terraform output -raw inference_worker_role_arn)"
@@ -459,95 +456,55 @@ jobs:
           export ALB_CERTIFICATE_ARN="$(terraform output -raw alb_certificate_arn)"
 
           python - <<'PY'
-          import json, os
+          import os
+          import re
+          from pathlib import Path
 
-          commands = [
-              "set -euo pipefail",
-              "if ! command -v kubectl >/dev/null 2>&1; then curl -fsSLo /tmp/kubectl https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl && chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; fi",
-              "export KUBECONFIG=/tmp/eks-kubeconfig",
-              f"aws eks update-kubeconfig --region {os.environ['AWS_REGION']} --name {os.environ['EKS_CLUSTER_NAME']} --role-arn {os.environ['BOOTSTRAP_ROLE_ARN']} --kubeconfig /tmp/eks-kubeconfig",
-              "for i in $(seq 1 40); do kubectl get serviceaccount -n inference inference-worker >/dev/null 2>&1 && break; sleep 15; done",
-              "kubectl get serviceaccount -n inference inference-worker >/dev/null 2>&1",
-              "for i in $(seq 1 40); do kubectl get serviceaccount -n app dashboard-backend >/dev/null 2>&1 && break; sleep 15; done",
-              "kubectl get serviceaccount -n app dashboard-backend >/dev/null 2>&1",
-              f"kubectl annotate serviceaccount -n inference inference-worker eks.amazonaws.com/role-arn='{os.environ['INFERENCE_WORKER_ROLE_ARN']}' --overwrite",
-              f"kubectl annotate serviceaccount -n app dashboard-backend eks.amazonaws.com/role-arn='{os.environ['DASHBOARD_BACKEND_ROLE_ARN']}' --overwrite",
-              "kubectl rollout restart deployment/inference-worker -n inference || true",
-              "kubectl rollout restart deployment/dashboard-backend -n app || true",
+          root = Path.cwd().parent.parent
+          updates = [
+              (
+                  root / "public/k8s/apps/inference-worker/serviceaccount.yaml",
+                  r"(eks\.amazonaws\.com/role-arn:\s*).*$",
+                  rf"\1{os.environ['INFERENCE_WORKER_ROLE_ARN']}",
+              ),
+              (
+                  root / "public/k8s/apps/dashboard-backend/service-account.yaml",
+                  r"(eks\.amazonaws\.com/role-arn:\s*).*$",
+                  rf"\1{os.environ['DASHBOARD_BACKEND_ROLE_ARN']}",
+              ),
+              (
+                  root / "public/k8s/apps/inference-api/ingress.yaml",
+                  r"(alb\.ingress\.kubernetes\.io/certificate-arn:\s*).*$",
+                  rf"\1{os.environ['ALB_CERTIFICATE_ARN']}",
+              ),
+              (
+                  root / "public/k8s/apps/dashboard-frontend/ingress.yaml",
+                  r"(alb\.ingress\.kubernetes\.io/certificate-arn:\s*).*$",
+                  rf"\1{os.environ['ALB_CERTIFICATE_ARN']}",
+              ),
           ]
 
-          if os.environ.get("ALB_CERTIFICATE_ARN"):
-              commands.extend([
-                  "for i in $(seq 1 40); do kubectl get ingress -n inference inference-api >/dev/null 2>&1 && break; sleep 15; done",
-                  "kubectl get ingress -n inference inference-api >/dev/null 2>&1",
-                  "for i in $(seq 1 40); do kubectl get ingress -n app dashboard-frontend >/dev/null 2>&1 && break; sleep 15; done",
-                  "kubectl get ingress -n app dashboard-frontend >/dev/null 2>&1",
-                  f"kubectl annotate ingress -n inference inference-api alb.ingress.kubernetes.io/certificate-arn='{os.environ['ALB_CERTIFICATE_ARN']}' --overwrite",
-                  f"kubectl annotate ingress -n app dashboard-frontend alb.ingress.kubernetes.io/certificate-arn='{os.environ['ALB_CERTIFICATE_ARN']}' --overwrite",
-              ])
-
-          with open("runtime-annotation-commands.json", "w", encoding="utf-8") as fp:
-              json.dump({"commands": commands}, fp)
+          for path, pattern, replacement in updates:
+              text = path.read_text(encoding="utf-8")
+              updated = re.sub(pattern, replacement, text, flags=re.MULTILINE)
+              path.write_text(updated, encoding="utf-8")
           PY
 
-          COMMAND_ID=$(aws ssm send-command \
-            --region "${AWS_REGION}" \
-            --instance-ids "${TARGET_INSTANCE_ID}" \
-            --document-name "AWS-RunShellScript" \
-            --comment "Patch runtime Kubernetes annotations" \
-            --parameters file://runtime-annotation-commands.json \
-            --query 'Command.CommandId' \
-            --output text)
-
-          echo "command_id=${COMMAND_ID}" >> "$GITHUB_OUTPUT"
-
-      - name: Wait for runtime annotation patch
-        if: ${{ inputs.action == 'apply' && steps.patch_runtime_annotations.outputs.command_id != '' }}
-        env:
-          COMMAND_ID: ${{ steps.patch_runtime_annotations.outputs.command_id }}
-          TARGET_INSTANCE_ID: ${{ steps.resolve_instance.outputs.value }}
+      - name: Commit runtime manifest values
+        if: ${{ inputs.action == 'apply' }}
         run: |
-          for ((i=1; i<=SSM_WAIT_ATTEMPTS; i++)); do
-            STATUS=$(aws ssm get-command-invocation \
-              --region "${AWS_REGION}" \
-              --command-id "${COMMAND_ID}" \
-              --instance-id "${TARGET_INSTANCE_ID}" \
-              --query 'Status' \
-              --output text)
-
-            echo "Runtime annotation patch status (${i}/${SSM_WAIT_ATTEMPTS}): ${STATUS}"
-
-            if [[ "${STATUS}" == "Success" ]]; then
-              aws ssm get-command-invocation \
-                --region "${AWS_REGION}" \
-                --command-id "${COMMAND_ID}" \
-                --instance-id "${TARGET_INSTANCE_ID}" \
-                --query 'StandardOutputContent' \
-                --output text || true
-              exit 0
-            fi
-
-            if [[ "${STATUS}" == "Failed" || "${STATUS}" == "Cancelled" || "${STATUS}" == "TimedOut" || "${STATUS}" == "Undeliverable" || "${STATUS}" == "Terminated" ]]; then
-              aws ssm get-command-invocation \
-                --region "${AWS_REGION}" \
-                --command-id "${COMMAND_ID}" \
-                --instance-id "${TARGET_INSTANCE_ID}" \
-                --query 'StandardOutputContent' \
-                --output text || true
-              aws ssm get-command-invocation \
-                --region "${AWS_REGION}" \
-                --command-id "${COMMAND_ID}" \
-                --instance-id "${TARGET_INSTANCE_ID}" \
-                --query 'StandardErrorContent' \
-                --output text || true
-              exit 1
-            fi
-
-            sleep "${SSM_WAIT_INTERVAL_SECONDS}"
-          done
-
-          echo "Runtime annotation patch timed out."
-          exit 1
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/k8s/apps/inference-worker/serviceaccount.yaml \
+            public/k8s/apps/dashboard-backend/service-account.yaml \
+            public/k8s/apps/inference-api/ingress.yaml \
+            public/k8s/apps/dashboard-frontend/ingress.yaml
+          if git diff --cached --quiet; then
+            echo "No runtime manifest changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: refresh public runtime manifest values"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Update Route53 A records for Internal ALB
         if: ${{ inputs.action == 'apply' && steps.resolve_instance.outputs.value != '' }}

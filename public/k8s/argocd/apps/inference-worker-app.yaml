@@ -15,13 +15,6 @@ metadata:
     argocd-image-updater.argoproj.io/git-branch: main
 spec:
   project: default
-  ignoreDifferences:
-    - group: ""
-      kind: ServiceAccount
-      name: inference-worker
-      namespace: inference
-      jsonPointers:
-        - /metadata/annotations/eks.amazonaws.com~1role-arn
   source:
     repoURL: https://github.com/SGS-Strategy/hybrid-ai-serving-platform.git
     targetRevision: main

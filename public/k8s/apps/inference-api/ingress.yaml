@@ -10,10 +10,11 @@ metadata:
     alb.ingress.kubernetes.io/backend-protocol: HTTP
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
     alb.ingress.kubernetes.io/ssl-redirect: '443'
+    alb.ingress.kubernetes.io/certificate-arn: __ALB_CERTIFICATE_ARN__
     alb.ingress.kubernetes.io/healthcheck-path: /healthz
     alb.ingress.kubernetes.io/success-codes: "200"
     alb.ingress.kubernetes.io/inbound-cidrs: 10.0.0.0/16,192.168.0.0/24
-    # IngressGroup: 여러 네임스페이스의 Ingress를 ALB 하나로 통합
+    # IngressGroup: unify Ingress resources from multiple namespaces behind one ALB.
     alb.ingress.kubernetes.io/group.name: internal
     alb.ingress.kubernetes.io/group.order: "10"
 spec:
