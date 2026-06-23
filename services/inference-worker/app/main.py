@@ -120,6 +120,14 @@ def _retry_poll_delay_seconds() -> float:
     return float(os.getenv("RETRY_POLL_DELAY_SECONDS", "1"))
 
 
+def _kserve_timeout_seconds() -> float:
+    return float(os.getenv("KSERVE_TIMEOUT_SECONDS", "10"))
+
+
+def _kafka_publish_timeout_seconds() -> float:
+    return float(os.getenv("KAFKA_PUBLISH_TIMEOUT_SECONDS", "10"))
+
+
 def _results_table_name() -> str:
     return os.getenv("DYNAMODB_TABLE_NAME", "sgs-hasp-inference-results")
 
@@ -333,7 +341,7 @@ def _publish(
     key = payload.get("equipment_id") if isinstance(payload, dict) else None
     key = key or request_id
     try:
-        producer.send(topic, key=key, value=payload).get(timeout=30)
+        producer.send(topic, key=key, value=payload).get(timeout=_kafka_publish_timeout_seconds())
     except KafkaError as exc:
         if topic == _retry_topic():
             error_type = ErrorType.RETRY_PUBLISH_ERROR
@@ -389,7 +397,7 @@ def _process_message(payload: dict[str, Any]) -> dict[str, Any]:
         "timestamp": payload.get("timestamp"),
         "inputs": payload.get("inputs", []),
     }
-    with httpx.Client(timeout=30.0) as client:
+    with httpx.Client(timeout=_kserve_timeout_seconds()) as client:
         response = client.post(_predict_url(), json=predictor_payload)
         response.raise_for_status()
         result = response.json()
