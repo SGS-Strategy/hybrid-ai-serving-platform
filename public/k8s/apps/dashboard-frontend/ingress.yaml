@@ -15,7 +15,7 @@ metadata:
     
     
     
-    alb.ingress.kubernetes.io/group.name: internal
+    arn:aws:acm:ap-northeast-2:808379768010:certificate/ac1ae61c-c164-4a5c-bb34-7e6037c458d3
     alb.ingress.kubernetes.io/group.order: "20"
 spec:
   ingressClassName: alb
