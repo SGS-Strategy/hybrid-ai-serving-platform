@@ -14,7 +14,7 @@ metadata:
     
     
     
-    # IngressGroup: unify Ingress resources from multiple namespaces behind one ALB.
+    
     alb.ingress.kubernetes.io/group.name: internal
     alb.ingress.kubernetes.io/group.order: "20"
 spec:
