@@ -379,9 +379,9 @@ write_ssh_config() {
   ensure_ssh_key
   if [[ "${HA_OPENSTACK_PROVIDER}" == "kolla" ]]; then
     # Kolla: tenant VM은 qdhcp netns nc 래퍼 경유 (DevStack lxc 대체, 좁은 NOPASSWD sudoers)
-    proxy_cmd="sudo ${HA_KOLLA_NETNS_NC} %%h %%p"
+    proxy_cmd="sudo ${HA_KOLLA_NETNS_NC} %h %p"
   else
-    proxy_cmd="lxc exec ha-openstack -- nc %%h %%p"
+    proxy_cmd="lxc exec ha-openstack -- nc %h %p"
   fi
   tmp_config="${SSH_CONFIG}.$$"
   {
