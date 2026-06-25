@@ -12,6 +12,7 @@ on:
           - plan
           - apply
           - destroy
+          - repair-vpn-state
 
 permissions:
   id-token: write
@@ -81,6 +82,37 @@ jobs:
         working-directory: public/terraform
         run: terraform init
 
+      - name: Repair MacMini VPN Terraform state
+        if: ${{ inputs.action == 'repair-vpn-state' }}
+        working-directory: public/terraform
+        run: |
+          set -euo pipefail
+
+          echo "State before repair:"
+          terraform state list | grep -E 'aws_(customer_gateway|vpn_connection|vpn_connection_route)\.' || true
+
+          terraform state rm 'aws_customer_gateway.vpn_gateways["macmini"]' || true
+          terraform state rm 'aws_vpn_connection.vpn_gateways["macmini"]' || true
+
+          if terraform state show 'aws_customer_gateway.sites["edge"]' >/dev/null 2>&1; then
+            if terraform state show 'aws_customer_gateway.sites["macmini"]' >/dev/null 2>&1; then
+              echo 'aws_customer_gateway.sites["macmini"] already exists; skipping customer gateway move.'
+            else
+              terraform state mv 'aws_customer_gateway.sites["edge"]' 'aws_customer_gateway.sites["macmini"]'
+            fi
+          fi
+
+          if terraform state show 'aws_vpn_connection.sites["edge"]' >/dev/null 2>&1; then
+            if terraform state show 'aws_vpn_connection.sites["macmini"]' >/dev/null 2>&1; then
+              echo 'aws_vpn_connection.sites["macmini"] already exists; skipping VPN connection move.'
+            else
+              terraform state mv 'aws_vpn_connection.sites["edge"]' 'aws_vpn_connection.sites["macmini"]'
+            fi
+          fi
+
+          echo "State after repair:"
+          terraform state list | grep -E 'aws_(customer_gateway|vpn_connection|vpn_connection_route)\.' || true
+
       - name: Terraform validate
         working-directory: public/terraform
         run: terraform validate
@@ -104,7 +136,7 @@ jobs:
 
       - name: Resolve SSM bootstrap instance
         id: resolve_instance
-        if: ${{ inputs.action != 'plan' }}
+        if: ${{ inputs.action == 'apply' || inputs.action == 'destroy' }}
         run: |
           RUNNING_INSTANCE_IDS=$(aws ec2 describe-instances \
             --region "${AWS_REGION}" \
