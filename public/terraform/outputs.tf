@@ -164,12 +164,12 @@ output "vpn_gateway_id" {
 
 output "customer_gateway_ids" {
   description = "Customer gateway IDs keyed by site name"
-  value       = { for k, cgw in aws_customer_gateway.sites : k => cgw.id }
+  value       = merge({ for k, cgw in aws_customer_gateway.sites : k => cgw.id }, { for k, cgw in aws_customer_gateway.vpn_gateways : k => cgw.id })
 }
 
 output "vpn_connection_ids" {
   description = "Site-to-Site VPN connection IDs keyed by site name"
-  value       = { for k, vpn in aws_vpn_connection.sites : k => vpn.id }
+  value       = merge({ for k, vpn in aws_vpn_connection.sites : k => vpn.id }, { for k, vpn in aws_vpn_connection.vpn_gateways : k => vpn.id })
 }
 
 output "public_hosted_zone_id" {
@@ -185,23 +185,33 @@ output "private_hosted_zone_id" {
 # Bastion(strongSwan) 자동 설정용 — bh render 가 terraform output -json 으로 소비
 output "vpn_tunnel_addresses" {
   description = "AWS VPN tunnel outside addresses keyed by site name"
-  value = {
+  value = merge({
     for k, vpn in aws_vpn_connection.sites : k => {
       tunnel1 = vpn.tunnel1_address
       tunnel2 = vpn.tunnel2_address
     }
-  }
+    }, {
+    for k, vpn in aws_vpn_connection.vpn_gateways : k => {
+      tunnel1 = vpn.tunnel1_address
+      tunnel2 = vpn.tunnel2_address
+    }
+  })
 }
 
 output "vpn_tunnel_preshared_keys" {
   description = "AWS VPN tunnel pre-shared keys keyed by site name (ipsec.secrets 생성용)"
   sensitive   = true
-  value = {
+  value = merge({
     for k, vpn in aws_vpn_connection.sites : k => {
       tunnel1 = vpn.tunnel1_preshared_key
       tunnel2 = vpn.tunnel2_preshared_key
     }
-  }
+    }, {
+    for k, vpn in aws_vpn_connection.vpn_gateways : k => {
+      tunnel1 = vpn.tunnel1_preshared_key
+      tunnel2 = vpn.tunnel2_preshared_key
+    }
+  })
 }
 
 output "vpn_local_vpc_cidr" {

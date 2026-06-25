@@ -57,7 +57,7 @@ jobs:
 
       - name: Write optional tfvars override (non-sensitive variable)
         env:
-          TFVARS_CONTENT: ${{ vars.PUBLIC_TERRAFORM_TFVARS }}
+          TFVARS_CONTENT: ${{ vars.PUBLIC_TERRAFORM_TFVARS || secrets.PUBLIC_TERRAFORM_TFVARS }}
         working-directory: public/terraform
         run: |
           if [[ -n "$TFVARS_CONTENT" ]]; then
