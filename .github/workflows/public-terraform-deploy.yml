@@ -117,6 +117,147 @@ jobs:
         working-directory: public/terraform
         run: terraform validate
 
+      - name: Disable Bedrock action groups before Terraform removal
+        if: ${{ inputs.action == 'apply' || inputs.action == 'destroy' }}
+        env:
+          DLQ_SLACK_WEBHOOK_URL: ${{ secrets.INFRA_ALERTS }}
+        working-directory: public/terraform
+        run: |
+          if [[ "${{ inputs.action }}" == "apply" && -n "${DLQ_SLACK_WEBHOOK_URL}" ]]; then
+            echo "DLQ webhook secret is configured; keeping Bedrock action groups enabled."
+            exit 0
+          fi
+
+          PROJECT_NAME=$(printf 'var.project_name\n' | terraform console -no-color | tr -d '\r"')
+          ENVIRONMENT_NAME=$(printf 'var.environment\n' | terraform console -no-color | tr -d '\r"')
+          if [[ -z "${ENVIRONMENT_NAME}" ]]; then
+            ENVIRONMENT_NAME="public"
+          fi
+          AGENT_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-incident-copilot"
+          echo "Checking Bedrock agent action groups for ${AGENT_NAME}..."
+
+          export AGENT_NAME
+          export AWS_REGION
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          import time
+
+          region = os.environ["AWS_REGION"]
+          agent_name = os.environ["AGENT_NAME"]
+
+          def aws_json(*args):
+              proc = subprocess.run(
+                  ["aws", *args, "--region", region, "--output", "json"],
+                  check=False,
+                  capture_output=True,
+                  text=True,
+              )
+              if proc.returncode != 0:
+                  raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f"aws {' '.join(args)} failed")
+              return json.loads(proc.stdout or "{}")
+
+          agents = aws_json("bedrock-agent", "list-agents")
+          matches = [
+              summary["agentId"]
+              for summary in agents.get("agentSummaries", [])
+              if summary.get("agentName") == agent_name
+          ]
+          if not matches:
+              print(f"No Bedrock agent named {agent_name} found; skipping disable step.")
+              sys.exit(0)
+
+          agent_id = matches[0]
+          action_groups = aws_json(
+              "bedrock-agent",
+              "list-agent-action-groups",
+              "--agent-id",
+              agent_id,
+              "--agent-version",
+              "DRAFT",
+          ).get("actionGroupSummaries", [])
+          if not action_groups:
+              print(f"No DRAFT action groups found for agent {agent_name}; skipping disable step.")
+              sys.exit(0)
+
+          for summary in action_groups:
+              action_group_id = summary["actionGroupId"]
+              details = aws_json(
+                  "bedrock-agent",
+                  "get-agent-action-group",
+                  "--agent-id",
+                  agent_id,
+                  "--agent-version",
+                  "DRAFT",
+                  "--action-group-id",
+                  action_group_id,
+              )["agentActionGroup"]
+
+              current_state = details.get("actionGroupState")
+              action_group_name = details["actionGroupName"]
+              if current_state == "DISABLED":
+                  print(f"Action group {action_group_name} is already disabled.")
+                  continue
+
+              payload = {
+                  "agentId": agent_id,
+                  "agentVersion": "DRAFT",
+                  "actionGroupId": action_group_id,
+                  "actionGroupName": action_group_name,
+                  "actionGroupState": "DISABLED",
+              }
+              for key in (
+                  "description",
+                  "parentActionGroupSignature",
+                  "parentActionGroupSignatureParams",
+                  "actionGroupExecutor",
+                  "apiSchema",
+                  "functionSchema",
+              ):
+                  value = details.get(key)
+                  if value not in (None, "", {}, []):
+                      payload[key] = value
+
+              with open("bedrock-disable-action-group.json", "w", encoding="utf-8") as fp:
+                  json.dump(payload, fp)
+
+              subprocess.run(
+                  [
+                      "aws",
+                      "bedrock-agent",
+                      "update-agent-action-group",
+                      "--region",
+                      region,
+                      "--cli-input-json",
+                      "file://bedrock-disable-action-group.json",
+                  ],
+                  check=True,
+              )
+
+              for attempt in range(1, 21):
+                  refreshed = aws_json(
+                      "bedrock-agent",
+                      "get-agent-action-group",
+                      "--agent-id",
+                      agent_id,
+                      "--agent-version",
+                      "DRAFT",
+                      "--action-group-id",
+                      action_group_id,
+                  )["agentActionGroup"]
+                  state = refreshed.get("actionGroupState")
+                  print(f"{action_group_name} state after disable request ({attempt}/20): {state}")
+                  if state == "DISABLED":
+                      break
+                  time.sleep(3)
+              else:
+                  raise RuntimeError(f"Timed out waiting for action group {action_group_name} to become DISABLED")
+
+          print(f"Bedrock action groups are ready for Terraform removal on agent {agent_name}.")
+          PY
+
       - name: Terraform plan
         if: ${{ inputs.action == 'apply' || inputs.action == 'plan' }}
         working-directory: public/terraform
