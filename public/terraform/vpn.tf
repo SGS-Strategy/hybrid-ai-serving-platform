@@ -105,8 +105,8 @@ resource "aws_vpn_connection_route" "vpn_gateways" {
 
 # 라우트 전파 - 프라이빗 라우팅 테이블
 resource "aws_vpn_gateway_route_propagation" "private" {
-  count = var.enable_site_to_site_vpn ? 1 : 0
+  count = var.enable_site_to_site_vpn ? length(aws_route_table.private) : 0
 
   vpn_gateway_id = aws_vpn_gateway.main[0].id
-  route_table_id = aws_route_table.private.id
+  route_table_id = aws_route_table.private[count.index].id
 }

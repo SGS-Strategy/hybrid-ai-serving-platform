@@ -149,13 +149,13 @@ variable "msk_broker_instance_type" {
 variable "msk_number_of_broker_nodes" {
   description = "Number of broker nodes for the MSK cluster"
   type        = number
-  default     = 2 # 임시 비용 절감 (서브넷 2개 최소 요구사항 맞춤), 원래 값: 3 (나중에 복구)
+  default     = 3
 }
 
 variable "msk_ebs_volume_size" {
   description = "Broker EBS volume size in GiB for the MSK cluster"
   type        = number
-  default     = 100 # ★ 원래 값: 1000 GiB (나중에 복구) ★
+  default     = 100
 }
 
 variable "manage_msk_topics" {
@@ -167,14 +167,14 @@ variable "manage_msk_topics" {
 variable "msk_topic_replication_factor" {
   description = "Replication factor to use when creating MSK topics"
   type        = number
-  default     = 1 # ★ 원래 값: 3 (나중에 복구) ★
+  default     = 3
 }
 
 variable "msk_topic_configs" {
   description = "Topic-level MSK configuration properties to apply when creating or updating topics"
   type        = map(string)
   default = {
-    "min.insync.replicas" = "1" # ★ 원래 값: 2 (나중에 복구) ★
+    "min.insync.replicas" = "2"
   }
 }
 

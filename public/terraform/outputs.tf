@@ -20,8 +20,18 @@ output "msk_private_subnet_ids" {
 }
 
 output "nat_gateway_id" {
-  description = "ID of the single NAT gateway"
-  value       = aws_nat_gateway.main.id
+  description = "ID of the first NAT gateway"
+  value       = aws_nat_gateway.main[0].id
+}
+
+output "nat_gateway_ids" {
+  description = "IDs of the NAT gateways"
+  value       = aws_nat_gateway.main[*].id
+}
+
+output "private_route_table_ids" {
+  description = "IDs of the private route tables"
+  value       = aws_route_table.private[*].id
 }
 
 # Data store outputs
