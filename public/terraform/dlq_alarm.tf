@@ -1,10 +1,4 @@
-locals {
-  enable_dlq_alert_webhook = trimspace(var.dlq_alert_slack_webhook_url) != ""
-}
-
 resource "aws_security_group" "dlq_alert_lambda" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   name        = "${var.project_name}-dlq-alert-lambda-sg"
   description = "Security group for the DLQ alert Lambda"
   vpc_id      = aws_vpc.main.id
@@ -22,36 +16,28 @@ resource "aws_security_group" "dlq_alert_lambda" {
 }
 
 resource "aws_security_group_rule" "dlq_alert_lambda_to_eks_api" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   type                     = "ingress"
   description              = "Allow the DLQ alert Lambda to reach the EKS private API endpoint"
   from_port                = 443
   to_port                  = 443
   protocol                 = "tcp"
   security_group_id        = aws_eks_cluster.main.vpc_config[0].cluster_security_group_id
-  source_security_group_id = aws_security_group.dlq_alert_lambda[0].id
+  source_security_group_id = aws_security_group.dlq_alert_lambda.id
 }
 
 data "archive_file" "dlq_alarm_lambda" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   type        = "zip"
   source_file = "${path.module}/dlq_alarm_lambda.py"
   output_path = "${path.module}/dlq_alarm_lambda.zip"
 }
 
 data "archive_file" "incident_copilot_action_group_lambda" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   type        = "zip"
   source_file = "${path.module}/incident_copilot_action_group_lambda.py"
   output_path = "${path.module}/incident_copilot_action_group_lambda.zip"
 }
 
 data "aws_iam_policy_document" "dlq_alarm_lambda_assume" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   statement {
     effect = "Allow"
 
@@ -65,38 +51,28 @@ data "aws_iam_policy_document" "dlq_alarm_lambda_assume" {
 }
 
 resource "aws_iam_role" "dlq_alarm_lambda" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   name               = "${var.project_name}-dlq-alarm-lambda"
-  assume_role_policy = data.aws_iam_policy_document.dlq_alarm_lambda_assume[0].json
+  assume_role_policy = data.aws_iam_policy_document.dlq_alarm_lambda_assume.json
 
   tags = local.common_tags
 }
 
 resource "aws_iam_role_policy_attachment" "dlq_alarm_lambda_basic" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
-  role       = aws_iam_role.dlq_alarm_lambda[0].name
+  role       = aws_iam_role.dlq_alarm_lambda.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
 resource "aws_iam_role_policy_attachment" "dlq_alarm_lambda_vpc_access" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
-  role       = aws_iam_role.dlq_alarm_lambda[0].name
+  role       = aws_iam_role.dlq_alarm_lambda.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
 resource "aws_iam_role_policy_attachment" "dlq_alarm_lambda_msk_execution" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
-  role       = aws_iam_role.dlq_alarm_lambda[0].name
+  role       = aws_iam_role.dlq_alarm_lambda.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaMSKExecutionRole"
 }
 
 data "aws_iam_policy_document" "dlq_alarm_lambda_runtime" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   statement {
     effect = "Allow"
     actions = [
@@ -127,26 +103,20 @@ data "aws_iam_policy_document" "dlq_alarm_lambda_runtime" {
 }
 
 resource "aws_iam_role_policy" "dlq_alarm_lambda_runtime" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   name   = "${var.project_name}-incident-copilot-runtime"
-  role   = aws_iam_role.dlq_alarm_lambda[0].id
-  policy = data.aws_iam_policy_document.dlq_alarm_lambda_runtime[0].json
+  role   = aws_iam_role.dlq_alarm_lambda.id
+  policy = data.aws_iam_policy_document.dlq_alarm_lambda_runtime.json
 }
 
 resource "aws_eks_access_entry" "dlq_alarm_lambda" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   cluster_name  = aws_eks_cluster.main.name
-  principal_arn = aws_iam_role.dlq_alarm_lambda[0].arn
+  principal_arn = aws_iam_role.dlq_alarm_lambda.arn
   type          = "STANDARD"
 }
 
 resource "aws_eks_access_policy_association" "dlq_alarm_lambda_view" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   cluster_name  = aws_eks_cluster.main.name
-  principal_arn = aws_iam_role.dlq_alarm_lambda[0].arn
+  principal_arn = aws_iam_role.dlq_alarm_lambda.arn
   policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy"
 
   access_scope {
@@ -157,19 +127,17 @@ resource "aws_eks_access_policy_association" "dlq_alarm_lambda_view" {
 }
 
 resource "aws_lambda_function" "dlq_alarm" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   function_name    = "${var.project_name}-dlq-alarm-webhook"
-  role             = aws_iam_role.dlq_alarm_lambda[0].arn
+  role             = aws_iam_role.dlq_alarm_lambda.arn
   runtime          = "python3.11"
   handler          = "dlq_alarm_lambda.handler"
-  filename         = data.archive_file.dlq_alarm_lambda[0].output_path
-  source_code_hash = data.archive_file.dlq_alarm_lambda[0].output_base64sha256
+  filename         = data.archive_file.dlq_alarm_lambda.output_path
+  source_code_hash = data.archive_file.dlq_alarm_lambda.output_base64sha256
   timeout          = 60
 
   vpc_config {
     subnet_ids         = aws_subnet.eks_private[*].id
-    security_group_ids = [aws_security_group.dlq_alert_lambda[0].id]
+    security_group_ids = [aws_security_group.dlq_alert_lambda.id]
   }
 
   environment {
@@ -187,8 +155,8 @@ resource "aws_lambda_function" "dlq_alarm" {
       REQUEST_TOPIC_NAME       = "inference-request"
       RETRY_TOPIC_NAME         = "inference-retry"
       WORKER_CONSUMER_GROUP    = "inference-worker-group"
-      BEDROCK_AGENT_ID         = try(aws_bedrockagent_agent.incident_copilot[0].id, "")
-      BEDROCK_AGENT_ALIAS_ID   = try(aws_bedrockagent_agent_alias.incident_copilot[0].agent_alias_id, "")
+      BEDROCK_AGENT_ID         = aws_bedrockagent_agent.incident_copilot.id
+      BEDROCK_AGENT_ALIAS_ID   = aws_bedrockagent_agent_alias.incident_copilot.agent_alias_id
       MONITORING_DASHBOARD_URL = var.incident_copilot_monitoring_url
     }
   }
@@ -201,19 +169,17 @@ resource "aws_lambda_function" "dlq_alarm" {
 }
 
 resource "aws_lambda_function" "incident_copilot_action_group" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   function_name    = "${var.project_name}-incident-copilot-action-group"
-  role             = aws_iam_role.dlq_alarm_lambda[0].arn
+  role             = aws_iam_role.dlq_alarm_lambda.arn
   runtime          = "python3.11"
   handler          = "incident_copilot_action_group_lambda.handler"
-  filename         = data.archive_file.incident_copilot_action_group_lambda[0].output_path
-  source_code_hash = data.archive_file.incident_copilot_action_group_lambda[0].output_base64sha256
+  filename         = data.archive_file.incident_copilot_action_group_lambda.output_path
+  source_code_hash = data.archive_file.incident_copilot_action_group_lambda.output_base64sha256
   timeout          = 30
 
   vpc_config {
     subnet_ids         = aws_subnet.eks_private[*].id
-    security_group_ids = [aws_security_group.dlq_alert_lambda[0].id]
+    security_group_ids = [aws_security_group.dlq_alert_lambda.id]
   }
 
   environment {
@@ -233,8 +199,6 @@ resource "aws_lambda_function" "incident_copilot_action_group" {
 }
 
 data "aws_iam_policy_document" "incident_copilot_agent_assume" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   statement {
     effect = "Allow"
 
@@ -260,17 +224,13 @@ data "aws_iam_policy_document" "incident_copilot_agent_assume" {
 }
 
 resource "aws_iam_role" "incident_copilot_agent" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   name               = "${var.project_name}-incident-copilot-agent"
-  assume_role_policy = data.aws_iam_policy_document.incident_copilot_agent_assume[0].json
+  assume_role_policy = data.aws_iam_policy_document.incident_copilot_agent_assume.json
 
   tags = local.common_tags
 }
 
 data "aws_iam_policy_document" "incident_copilot_agent_runtime" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   statement {
     effect = "Allow"
     actions = [
@@ -283,29 +243,23 @@ data "aws_iam_policy_document" "incident_copilot_agent_runtime" {
 }
 
 resource "aws_iam_role_policy" "incident_copilot_agent_runtime" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   name   = "${var.project_name}-incident-copilot-agent-runtime"
-  role   = aws_iam_role.incident_copilot_agent[0].id
-  policy = data.aws_iam_policy_document.incident_copilot_agent_runtime[0].json
+  role   = aws_iam_role.incident_copilot_agent.id
+  policy = data.aws_iam_policy_document.incident_copilot_agent_runtime.json
 }
 
 resource "aws_lambda_permission" "incident_copilot_action_group_bedrock" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   statement_id   = "AllowBedrockInvokeActionGroup"
   action         = "lambda:InvokeFunction"
-  function_name  = aws_lambda_function.incident_copilot_action_group[0].function_name
+  function_name  = aws_lambda_function.incident_copilot_action_group.function_name
   principal      = "bedrock.amazonaws.com"
   source_account = data.aws_caller_identity.current.account_id
   source_arn     = "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:agent/*"
 }
 
 resource "aws_bedrockagent_agent" "incident_copilot" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   agent_name                  = "${var.project_name}-${var.environment != "" ? var.environment : "public"}-incident-copilot"
-  agent_resource_role_arn     = aws_iam_role.incident_copilot_agent[0].arn
+  agent_resource_role_arn     = aws_iam_role.incident_copilot_agent.arn
   foundation_model            = var.incident_copilot_bedrock_model_id
   idle_session_ttl_in_seconds = 900
   instruction = join(" ", [
@@ -327,15 +281,13 @@ resource "aws_bedrockagent_agent" "incident_copilot" {
 }
 
 resource "aws_bedrockagent_agent_action_group" "incident_triage" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   action_group_name = "incident-triage"
-  agent_id          = aws_bedrockagent_agent.incident_copilot[0].id
+  agent_id          = aws_bedrockagent_agent.incident_copilot.id
   agent_version     = "DRAFT"
   description       = "Collect targeted Kubernetes evidence for inference incidents"
 
   action_group_executor {
-    lambda = aws_lambda_function.incident_copilot_action_group[0].arn
+    lambda = aws_lambda_function.incident_copilot_action_group.arn
   }
 
   function_schema {
@@ -394,20 +346,16 @@ resource "aws_bedrockagent_agent_action_group" "incident_triage" {
 }
 
 resource "aws_bedrockagent_agent_alias" "incident_copilot" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   agent_alias_name = "prod"
-  agent_id         = aws_bedrockagent_agent.incident_copilot[0].id
+  agent_id         = aws_bedrockagent_agent.incident_copilot.id
   description      = "Production alias for the inference incident copilot"
 
   depends_on = [aws_bedrockagent_agent_action_group.incident_triage]
 }
 
 resource "aws_lambda_event_source_mapping" "dlq_alarm_msk" {
-  count = local.enable_dlq_alert_webhook ? 1 : 0
-
   event_source_arn  = aws_msk_cluster.main.arn
-  function_name     = aws_lambda_function.dlq_alarm[0].arn
+  function_name     = aws_lambda_function.dlq_alarm.arn
   topics            = [var.dlq_alert_topic_name]
   batch_size        = 1
   starting_position = "LATEST"

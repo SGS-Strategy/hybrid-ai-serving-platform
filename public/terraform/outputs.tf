@@ -243,18 +243,18 @@ output "vpn_local_vpc_cidr" {
 
 output "dlq_alert_lambda_name" {
   description = "Lambda function name for the inference incident copilot webhook delivery"
-  value       = local.enable_dlq_alert_webhook ? aws_lambda_function.dlq_alarm[0].function_name : null
+  value       = aws_lambda_function.dlq_alarm.function_name
   sensitive   = true
 }
 
 output "incident_copilot_agent_id" {
   description = "Bedrock Agent ID for the Inference Incident Copilot"
-  value       = local.enable_dlq_alert_webhook ? try(aws_bedrockagent_agent.incident_copilot[0].id, null) : null
+  value       = aws_bedrockagent_agent.incident_copilot.id
   sensitive   = true
 }
 
 output "incident_copilot_agent_alias_id" {
   description = "Bedrock Agent alias ID for the Inference Incident Copilot"
-  value       = local.enable_dlq_alert_webhook ? try(aws_bedrockagent_agent_alias.incident_copilot[0].agent_alias_id, null) : null
+  value       = aws_bedrockagent_agent_alias.incident_copilot.agent_alias_id
   sensitive   = true
 }
