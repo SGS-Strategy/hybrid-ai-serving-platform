@@ -27,8 +27,25 @@ MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://minio.minio-tenant.svc.cluster.local}"
 ARTIFACT_BUCKET="${ARTIFACT_BUCKET:-artifacts}"
 ARTIFACT_PREFIX="${ARTIFACT_PREFIX:-models/mock/${IMAGE_TAG}}"
 
+# 실행 모드:
+#   (기본)          : train/package mock + promote readiness 프로브만 (아무것도 push 안 함)
+#   --manifest-only : 수정 없이 진짜 ECR-over-VPN. 이미 ECR에 있는 이미지(SRC_TAG)에
+#                     새 태그(NEW_TAG)를 put-image 로 붙임 → ecr.api/STS 만 사용, S3 불필요
+#   --push          : Harbor→ECR 풀 copy(skopeo). 레이어 업로드 발생 → S3 인터페이스 엔드포인트 필요
 DO_PUSH=false
-[[ "${1:-}" == "--push" ]] && DO_PUSH=true
+MANIFEST_ONLY=false
+ECR_SRC_TAG="${ECR_SRC_TAG:-latest}"
+ECR_NEW_TAG="${ECR_NEW_TAG:-vpn-test-$(date -u +%Y%m%d%H%M%S)}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --push) DO_PUSH=true; shift ;;
+    --manifest-only) MANIFEST_ONLY=true; shift ;;
+    --ecr-repo) ECR_REPOSITORY="$2"; shift 2 ;;
+    --src-tag) ECR_SRC_TAG="$2"; shift 2 ;;
+    --new-tag) ECR_NEW_TAG="$2"; shift 2 ;;
+    *) printf 'unknown arg: %s\n' "$1" >&2; exit 64 ;;
+  esac
+done
 
 log() { printf '[%s] %s\n' "$1" "$2"; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -91,8 +108,13 @@ promote_ecr() {
     log promote "SKIP: dkr.ecr 프로브 (AWS_ACCOUNT_ID 미설정 → <account>.dkr.ecr... 호스트 불명)"
   fi
   assert_vpc_private "sts.${AWS_REGION}.amazonaws.com"      || ready=false
-  # S3 인터페이스 엔드포인트(레이어 업로드용). enable_s3_interface_endpoint=true 필요.
-  assert_vpc_private "s3.${AWS_REGION}.amazonaws.com"       || ready=false
+  # S3 인터페이스 엔드포인트는 레이어 업로드(=풀 push)에만 필요. manifest-only/probe엔 무관.
+  if [[ "$DO_PUSH" == true ]]; then
+    assert_vpc_private "s3.${AWS_REGION}.amazonaws.com"     || ready=false
+  else
+    assert_vpc_private "s3.${AWS_REGION}.amazonaws.com" \
+      || log promote "NOTE: s3 사설 아님 — 풀 push엔 enable_s3_interface_endpoint 필요(지금 모드엔 무관)"
+  fi
 
   if [[ "$ready" != true ]]; then
     log promote "BLOCKED: 위 FAIL 항목 때문에 실 push 불가. (특히 s3.* 공인이면 enable_s3_interface_endpoint=true + 2차 apply 필요)"
@@ -100,8 +122,25 @@ promote_ecr() {
     return 2
   fi
 
+  # 수정 없이 진짜 VPN 검증: 기존 ECR 이미지에 새 태그만 put (레이어 업로드=S3 없음)
+  if [[ "$MANIFEST_ONLY" == true ]]; then
+    have aws || { log promote "aws CLI 필요"; return 1; }
+    log promote "manifest-only: ${ECR_REPOSITORY}:${ECR_SRC_TAG} → :${ECR_NEW_TAG} (S3 미사용, ecr.api/STS=VPN)"
+    local manifest
+    manifest="$(aws ecr batch-get-image --region "${AWS_REGION}" \
+      --repository-name "${ECR_REPOSITORY}" --image-ids imageTag="${ECR_SRC_TAG}" \
+      --query 'images[0].imageManifest' --output text)"
+    [[ -n "$manifest" && "$manifest" != "None" ]] || {
+      log promote "FAIL: ${ECR_REPOSITORY}:${ECR_SRC_TAG} 매니페스트 없음 (기존 이미지가 있어야 retag 가능)"; return 1; }
+    aws ecr put-image --region "${AWS_REGION}" \
+      --repository-name "${ECR_REPOSITORY}" --image-tag "${ECR_NEW_TAG}" \
+      --image-manifest "$manifest" >/dev/null
+    log promote "manifest-only push 완료: ${ECR_REPOSITORY}:${ECR_NEW_TAG} (VPN으로 ECR 컨트롤플레인 호출 성공)"
+    return 0
+  fi
+
   if [[ "$DO_PUSH" != true ]]; then
-    log promote "readiness GREEN. --push 없으므로 실제 copy 생략 (mock)."
+    log promote "readiness GREEN. --push/--manifest-only 없으므로 실제 호출 생략 (mock)."
     return 0
   fi
 
@@ -122,7 +161,7 @@ write_release() {
   "mock": true,
   "image_tag": "${IMAGE_TAG}",
   "harbor": { "image": "${HARBOR_IMAGE}", "digest": "${HARBOR_DIGEST}" },
-  "ecr": { "repository": "${ECR_REPOSITORY}", "region": "${AWS_REGION}", "pushed": ${DO_PUSH} }
+  "ecr": { "repository": "${ECR_REPOSITORY}", "region": "${AWS_REGION}", "full_push": ${DO_PUSH}, "manifest_only": ${MANIFEST_ONLY} }
 }
 JSON
   log release "release.json 생성: $(tr -d '\n' < "${WORK}/release.json")"
