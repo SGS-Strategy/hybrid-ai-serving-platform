@@ -848,6 +848,101 @@ wait_for_kubernetes_api() {
   ssh_node "$host" 'sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get --raw=/readyz >/dev/null'
 }
 
+#feature/hybrid# ==============================================================================
+#   GitLab Runner 주입 엔진 (수동 성공 수순과 100% 동일하게 일치화 완료)
+# ==============================================================================
+install_gitlab_runner_automation() {
+  local master_host="$1"
+  local install_script="${ROOT}/private/gitlab-runner/install.sh"
+  local values_file="${ROOT}/private/gitlab-runner/values.yaml"
+  local install_script_b64
+  local values_file_b64
+
+  info "--------------------------------------------------------"
+  info "Fox: GitLab Runner 무인 배포 및 사설 인프라 연동 자동화를 가동합니다."
+  info "--------------------------------------------------------"
+  local target_gitlab_url="${GITLAB_URL:-https://gitlab.intp.me}"
+  local target_gitlab_token="${GITLAB_RUNNER_AUTH_TOKEN:-}"
+
+  info "  Target 사설 GitLab 엔드포인트: ${target_gitlab_url}"
+
+  [[ -f "$install_script" ]] || die "GitLab Runner install script not found: ${install_script}"
+  [[ -f "$values_file" ]] || die "GitLab Runner values file not found: ${values_file}"
+
+  install_script_b64="$(base64 -w0 < "$install_script")"
+  values_file_b64="$(base64 -w0 < "$values_file")"
+
+  local gitlab_domain
+  gitlab_domain="${target_gitlab_url#*://}" # "gitlab.intp.me" 추출
+  gitlab_domain="${gitlab_domain%%/*}"      # 포트나 슬래시 제거
+
+  # 마스터 노드 관점에서 gitlab.intp.me의 실제 사설 IP를 동적으로 추출
+  local gitlab_ip
+  gitlab_ip=$(ssh_node "$master_host" "getent hosts ${gitlab_domain} | awk '{print \$1}'" | tr -d '\r\n' || true)
+  
+  if [[ -z "${gitlab_ip}" ]]; then
+    # getent로 해석 안 될 경우를 대비해 핑 테스트 결과로부터 추출하는 방어적 백업 설계
+    gitlab_ip=$(ssh_node "$master_host" "ping -c 1 ${gitlab_domain} | head -n 1 | awk -F'[()]' '{print \$2}'" | tr -d '\r\n' || true)
+  fi
+  
+  info "  Detected GitLab VM Private IP: ${gitlab_ip}"
+
+  # 마스터 노드 원격 진입 후 Runner install 자산을 임시 디렉터리에 주입해 실행
+  ssh_node "$master_host" bash -s -- \
+    "$target_gitlab_url" \
+    "$target_gitlab_token" \
+    "$gitlab_ip" \
+    "$install_script_b64" \
+    "$values_file_b64" <<'REMOTE'
+set -euo pipefail
+gl_url="$1"
+runner_auth_token="$2"
+gl_ip="$3"
+install_script_b64="$4"
+values_file_b64="$5"
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+
+# 1. 마스터 노드 내부에 Helm v3 패키지 관리자 다운로드 및 기동
+if ! command -v helm >/dev/null 2>&1; then
+  echo "Installing Helm v3 on master node..."
+  curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+fi
+
+# 2. 설치 스크립트와 values 파일을 master에 임시 배치
+printf '%s' "$install_script_b64" | base64 -d > "${workdir}/install.sh"
+printf '%s' "$values_file_b64" | base64 -d > "${workdir}/values.yaml"
+chmod 700 "${workdir}/install.sh"
+
+# 3. 팀 아키텍처 규칙에 따른 모델 빌드 격리 방(Namespace) 선행 생성
+sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf create namespace model-build --dry-run=client -o yaml | sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f -
+
+# 4. 사설 인증서 가로채서 K8s Secret으로 자동 구워내기 (수동 성공 수순과 100% 동일하게 일치화)
+openssl s_client -showcerts -connect gitlab.intp.me:443 </dev/null 2>/dev/null | openssl x509 -outform PEM > gitlab.intp.me.crt
+sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf -n model-build create secret generic gitlab-runner-certs \
+  --from-file=gitlab.intp.me.crt=gitlab.intp.me.crt \
+  --dry-run=client -o yaml | sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f -
+rm -f gitlab.intp.me.crt
+
+# 5. 분리된 install.sh를 kubeconfig 기반으로 실행
+echo "Deploying GitLab Runner with dedicated provisioning assets..."
+if [[ -n "$runner_auth_token" ]]; then
+  export GITLAB_RUNNER_AUTH_TOKEN="$runner_auth_token"
+fi
+export GITLAB_URL="$gl_url"
+export GITLAB_RUNNER_HOST_ALIAS_IP="${gl_ip:-100.110.101.77}"
+export GITLAB_RUNNER_NAMESPACE="model-build"
+export GITLAB_RUNNER_RELEASE="gitlab-runner"
+export GITLAB_RUNNER_CHART_VERSION="0.89.1"
+export GITLAB_RUNNER_CERT_SECRET_NAME="gitlab-runner-certs"
+export HARBOR_PULL_SECRET_NAME="harbor-kaniko-push"
+export KUBECTL_SUDO="true"
+export KUBECTL_KUBECONFIG="/etc/kubernetes/admin.conf"
+"${workdir}/install.sh"
+
+echo "🎉 GitLab Runner 제한망 배포 신호 탄막 전송 완료!"
+REMOTE
+}
 main() {
   local first_index
   local server_private_ip
