@@ -198,6 +198,12 @@ spec:
             mountPath: /workspace
 
     - name: kaniko-build
+      # harbor.intp.me를 내부 Harbor(10.42.0.127:80 HTTP)로 매핑 → Cloudflare(413) 우회.
+      # auth/이미지 이름은 harbor.intp.me 그대로 재사용(다른 소비자엔 영향 없음, 이 파드만).
+      hostAliases:
+        - ip: "10.42.0.127"
+          hostnames:
+            - harbor.intp.me
       container:
         image: harbor.intp.me/infra/kaniko-executor:v1.23.2-debug
         command:
@@ -215,13 +221,15 @@ spec:
               CLEAN_TAG="latest"
             fi
 
+            # 내부 Harbor는 HTTP(:80)만 서빙 → --insecure로 HTTP push(Cloudflare 413 우회).
+            # 캐시도 harbor.intp.me(Cloudflare)라 --cache=false로 비활성(큰 레이어 캐시 push도 413 나므로).
             /kaniko/executor \
               --dockerfile="{{workflow.parameters.dockerfile_path}}" \
               --context=/workspace \
-              --cache=true \
-              --cache-repo="{{workflow.parameters.kaniko_cache_repo}}" \
+              --cache=false \
               --snapshot-mode=redo \
-              --registry-certificate="{{workflow.parameters.harbor_registry}}"=/kaniko/certs/ca.crt \
+              --insecure \
+              --skip-tls-verify \
               --destination="{{workflow.parameters.harbor_registry}}/{{workflow.parameters.harbor_project}}/{{workflow.parameters.image_name}}:${CLEAN_TAG}"
         volumeMounts:
           - name: workspace
