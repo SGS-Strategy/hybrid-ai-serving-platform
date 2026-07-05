@@ -54,11 +54,6 @@ variable "msk_private_subnet_cidrs" {
   ]
 }
 
-variable "nat_gateway_az_index" {
-  description = "Availability zone index (0=AZ-a, 1=AZ-b, 2=AZ-c) for the single NAT gateway"
-  type        = number
-  default     = 1
-}
 
 # ECR 리포지토리 변수
 variable "ecr_repositories" {
