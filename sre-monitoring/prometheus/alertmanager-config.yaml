@@ -26,8 +26,8 @@ spec:
             key: infra
           channel: '#infra-alerts'
           color: '{{ if eq .Status "resolved" }}good{{ else if eq .GroupLabels.severity "critical" }}danger{{ else }}warning{{ end }}'
-          title: '{{ if eq .Status "resolved" }}[RESOLVED][{{ .GroupLabels.plane }}]{{ else }}[{{ if eq .GroupLabels.severity "critical" }}CRITICAL{{ else }}WARNING{{ end }}][{{ .GroupLabels.plane }}]{{ end }}'
-          text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ "\n" }}{{ .Annotations.description }}{{ end }}'
+          title: '{{ if eq .Status "resolved" }}✅ *[RESOLVED][{{ .GroupLabels.plane }}]* {{ (index .Alerts 0).Annotations.summary }}{{ else if eq .GroupLabels.severity "critical" }}🚨 *[CRITICAL][{{ .GroupLabels.plane }}]* {{ (index .Alerts 0).Annotations.summary }}{{ else }}⚠️ *[WARNING][{{ .GroupLabels.plane }}]* {{ (index .Alerts 0).Annotations.summary }}{{ end }}'
+          text: '{{ range .Alerts }}{{ .Annotations.description }}{{ "\n" }}{{ end }}'
           sendResolved: true
     - name: slo-alerts
       slackConfigs:
@@ -36,6 +36,6 @@ spec:
             key: slo
           channel: '#slo-alerts'
           color: '{{ if eq .Status "resolved" }}good{{ else if eq .GroupLabels.severity "critical" }}danger{{ else }}warning{{ end }}'
-          title: '{{ if eq .Status "resolved" }}[RESOLVED]{{ else }}[{{ if eq .GroupLabels.severity "critical" }}CRITICAL{{ else }}WARNING{{ end }}]{{ end }}'
-          text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ "\n" }}{{ .Annotations.description }}{{ end }}'
+          title: '{{ if eq .Status "resolved" }}✅ *[RESOLVED]* {{ (index .Alerts 0).Annotations.summary }}{{ else if eq .GroupLabels.severity "critical" }}🚨 *[CRITICAL]* {{ (index .Alerts 0).Annotations.summary }}{{ else }}⚠️ *[WARNING]* {{ (index .Alerts 0).Annotations.summary }}{{ end }}'
+          text: '{{ range .Alerts }}{{ .Annotations.description }}{{ "\n" }}{{ end }}'
           sendResolved: true
