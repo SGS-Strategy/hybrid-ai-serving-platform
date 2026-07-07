@@ -20,8 +20,18 @@ output "msk_private_subnet_ids" {
 }
 
 output "nat_gateway_id" {
-  description = "ID of the single NAT gateway"
-  value       = aws_nat_gateway.main.id
+  description = "ID of the first NAT gateway"
+  value       = aws_nat_gateway.main[0].id
+}
+
+output "nat_gateway_ids" {
+  description = "IDs of the NAT gateways"
+  value       = aws_nat_gateway.main[*].id
+}
+
+output "private_route_table_ids" {
+  description = "IDs of the private route tables"
+  value       = aws_route_table.private[*].id
 }
 
 # Data store outputs
@@ -79,6 +89,11 @@ output "aws_load_balancer_controller_role_arn" {
 output "argocd_image_updater_role_arn" {
   description = "IAM role ARN for the argocd-image-updater-controller service account (IRSA)"
   value       = aws_iam_role.argocd_image_updater.arn
+}
+
+output "cluster_autoscaler_role_arn" {
+  description = "IAM role ARN for the cluster-autoscaler service account (IRSA)"
+  value       = aws_iam_role.cluster_autoscaler.arn
 }
 
 output "eks_bootstrap_admin_role_arn" {
@@ -233,18 +248,18 @@ output "vpn_local_vpc_cidr" {
 
 output "dlq_alert_lambda_name" {
   description = "Lambda function name for the inference incident copilot webhook delivery"
-  value       = local.enable_dlq_alert_webhook ? aws_lambda_function.dlq_alarm[0].function_name : null
+  value       = aws_lambda_function.dlq_alarm.function_name
   sensitive   = true
 }
 
 output "incident_copilot_agent_id" {
   description = "Bedrock Agent ID for the Inference Incident Copilot"
-  value       = local.enable_dlq_alert_webhook ? try(aws_bedrockagent_agent.incident_copilot[0].id, null) : null
+  value       = aws_bedrockagent_agent.incident_copilot.id
   sensitive   = true
 }
 
 output "incident_copilot_agent_alias_id" {
   description = "Bedrock Agent alias ID for the Inference Incident Copilot"
-  value       = local.enable_dlq_alert_webhook ? try(aws_bedrockagent_agent_alias.incident_copilot[0].agent_alias_id, null) : null
+  value       = aws_bedrockagent_agent_alias.incident_copilot.agent_alias_id
   sensitive   = true
 }

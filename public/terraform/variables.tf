@@ -54,11 +54,6 @@ variable "msk_private_subnet_cidrs" {
   ]
 }
 
-variable "nat_gateway_az_index" {
-  description = "Availability zone index (0=AZ-a, 1=AZ-b, 2=AZ-c) for the single NAT gateway"
-  type        = number
-  default     = 1
-}
 
 # ECR 리포지토리 변수
 variable "ecr_repositories" {
@@ -94,6 +89,7 @@ variable "eks_node_groups" {
   description = "Per-workload EKS managed node group configuration"
   type = map(object({
     instance_types = list(string)
+    capacity_type  = string
     az_count       = number # how many AZs to span (1..3); subnets are taken from eks_private in order
     desired_size   = number
     min_size       = number
@@ -106,13 +102,24 @@ variable "eks_node_groups" {
     }))
   }))
   default = {
-    inference = {
+    inference_ondemand = {
       instance_types = ["m7i-flex.xlarge"] # 임시 비용 절감, 원래 값: m7i-flex.large (t3.small은 최대 파드 11개 한계로 변경) / t3.medium 파드 부족으로 변경 (06-22)
+      capacity_type  = "ON_DEMAND"
       az_count       = 3
-      desired_size   = 1 # ★ 원래 값 : 2 (나중에 복구) ★
-      min_size       = 1
-      max_size       = 10
-      labels         = { workload = "inference" }
+      desired_size   = 3
+      min_size       = 3
+      max_size       = 3
+      labels         = { workload = "inference", capacity = "ondemand" }
+      taints         = []
+    }
+    inference_spot = {
+      instance_types = ["m7i-flex.xlarge"]
+      capacity_type  = "SPOT"
+      az_count       = 3
+      desired_size   = 0
+      min_size       = 0
+      max_size       = 7
+      labels         = { workload = "inference", capacity = "spot" }
       taints         = []
     }
     general = {
@@ -121,9 +128,10 @@ variable "eks_node_groups" {
       # ★ 운영 전환 시: m7i-flex.large × 2 (8GB × 2, 비용 동일 + HA 확보)
       # ★   → instance_types = ["m7i-flex.large"], desired_size = 2, min_size = 2
       instance_types = ["m7i-flex.xlarge"] # 데모: 4vCPU / 16GB — general 워크로드 전체 수용
-      az_count       = 2
-      desired_size   = 1
-      min_size       = 1
+      capacity_type  = "ON_DEMAND"
+      az_count       = 3
+      desired_size   = 3
+      min_size       = 3
       max_size       = 5
       labels         = { workload = "general" }
       taints         = []
@@ -149,13 +157,13 @@ variable "msk_broker_instance_type" {
 variable "msk_number_of_broker_nodes" {
   description = "Number of broker nodes for the MSK cluster"
   type        = number
-  default     = 2 # 임시 비용 절감 (서브넷 2개 최소 요구사항 맞춤), 원래 값: 3 (나중에 복구)
+  default     = 3
 }
 
 variable "msk_ebs_volume_size" {
   description = "Broker EBS volume size in GiB for the MSK cluster"
   type        = number
-  default     = 100 # ★ 원래 값: 1000 GiB (나중에 복구) ★
+  default     = 100
 }
 
 variable "manage_msk_topics" {
@@ -167,14 +175,14 @@ variable "manage_msk_topics" {
 variable "msk_topic_replication_factor" {
   description = "Replication factor to use when creating MSK topics"
   type        = number
-  default     = 1 # ★ 원래 값: 3 (나중에 복구) ★
+  default     = 3
 }
 
 variable "msk_topic_configs" {
   description = "Topic-level MSK configuration properties to apply when creating or updating topics"
   type        = map(string)
   default = {
-    "min.insync.replicas" = "1" # ★ 원래 값: 2 (나중에 복구) ★
+    "min.insync.replicas" = "2"
   }
 }
 

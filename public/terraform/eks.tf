@@ -38,6 +38,11 @@ resource "aws_eks_addon" "vpc_cni" {
 resource "aws_eks_addon" "coredns" {
   cluster_name = aws_eks_cluster.main.name
   addon_name   = "coredns"
+  configuration_values = jsonencode({
+    nodeSelector = {
+      workload = "general"
+    }
+  })
 }
 
 # EKS kube-proxy 애드온
@@ -92,7 +97,7 @@ resource "aws_eks_node_group" "workloads" {
   subnet_ids      = local.node_group_subnet_ids[each.key]
 
   instance_types = each.value.instance_types
-  capacity_type  = "ON_DEMAND"
+  capacity_type  = each.value.capacity_type
 
   launch_template {
     id      = aws_launch_template.node_groups[each.key].id
