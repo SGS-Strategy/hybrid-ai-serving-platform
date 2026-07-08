@@ -45,16 +45,6 @@ output "dynamodb_alert_state_table_name" {
   value       = aws_dynamodb_table.equipment_alert_state.name
 }
 
-output "ses_alert_sender_email" {
-  description = "SES alert sender email"
-  value       = var.ses_alert_sender_email
-}
-
-output "ses_alert_recipient_email" {
-  description = "SES alert recipient email"
-  value       = var.ses_alert_recipient_email
-}
-
 output "alb_certificate_arn" {
   description = "ACM certificate ARN used by the internal ALB ingress resources"
   value       = local.effective_alb_certificate_arn
