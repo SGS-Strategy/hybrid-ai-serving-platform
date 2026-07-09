@@ -78,14 +78,8 @@ resource "aws_iam_role_policy_attachment" "inference_worker_dynamodb" {
   policy_arn = aws_iam_policy.inference_worker_dynamodb.arn
 }
 
-# SES 이메일 발송 + 장비 상태 테이블 권한
-data "aws_iam_policy_document" "inference_worker_ses" {
-  statement {
-    effect    = "Allow"
-    actions   = ["ses:SendEmail", "ses:SendRawEmail"]
-    resources = ["*"]
-  }
-
+# 장비 상태 테이블 권한
+data "aws_iam_policy_document" "inference_worker_alert_state" {
   statement {
     effect = "Allow"
     actions = [
@@ -97,16 +91,16 @@ data "aws_iam_policy_document" "inference_worker_ses" {
   }
 }
 
-resource "aws_iam_policy" "inference_worker_ses" {
-  name   = "${var.project_name}-inference-worker-ses"
-  policy = data.aws_iam_policy_document.inference_worker_ses.json
+resource "aws_iam_policy" "inference_worker_alert_state" {
+  name   = "${var.project_name}-inference-worker-alert-state"
+  policy = data.aws_iam_policy_document.inference_worker_alert_state.json
 
   tags = local.common_tags
 }
 
-resource "aws_iam_role_policy_attachment" "inference_worker_ses" {
+resource "aws_iam_role_policy_attachment" "inference_worker_alert_state" {
   role       = aws_iam_role.inference_worker.name
-  policy_arn = aws_iam_policy.inference_worker_ses.arn
+  policy_arn = aws_iam_policy.inference_worker_alert_state.arn
 }
 
 # === IRSA: dashboard-backend 파드가 DynamoDB 추론 결과 조회하기 위한 IAM 구성 ===
