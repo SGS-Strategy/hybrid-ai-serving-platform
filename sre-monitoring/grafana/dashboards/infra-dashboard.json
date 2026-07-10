@@ -102,10 +102,10 @@
       "options": { "filterable": true }
     },
 
-    { "type": "row", "title": "노드 오토스케일링 (Cluster Autoscaler)", "collapsed": false,
+    { "type": "row", "title": "Node Autoscaling", "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 }, "id": 60 },
 
-    { "id": 61, "title": "Ready 노드 수 (워크로드별)",
+    { "id": 61, "title": "Ready Nodes",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 31 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
@@ -117,7 +117,7 @@
       "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] } }
     },
 
-    { "id": 62, "title": "Pending Pod 수 (CA 스케일아웃 트리거)",
+    { "id": 62, "title": "Pending Pods",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 31 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
@@ -133,7 +133,7 @@
       "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] } }
     },
 
-    { "id": 63, "title": "CA 스케일링 이벤트 (30분 누적)",
+    { "id": 63, "title": "CA Scale Events",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 31 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
@@ -151,34 +151,41 @@
       "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "lastNotNull"] } }
     },
 
-    { "type": "row", "title": "KEDA 오토스케일링", "collapsed": false,
+    { "type": "row", "title": "Pod Autoscaling", "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 }, "id": 40 },
 
-    { "id": 41, "title": "Deployment 레플리카 수 (네임스페이스별)",
+    { "id": 41, "title": "Worker Replicas (KEDA)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 14, "x": 0, "y": 41 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 41 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [
-        { "expr": "kube_deployment_status_replicas_available{namespace=~\"$namespace\"}", "legendFormat": "{{ namespace }}/{{ deployment }}", "refId": "A" },
-        { "expr": "kube_deployment_spec_replicas{namespace=~\"$namespace\"}", "legendFormat": "{{ deployment }} (목표)", "refId": "B" }
+        { "expr": "kube_deployment_status_replicas_available{namespace=\"inference\", deployment=\"inference-worker\"}", "legendFormat": "현재 레플리카", "refId": "A" },
+        { "expr": "kube_deployment_spec_replicas{namespace=\"inference\", deployment=\"inference-worker\"}", "legendFormat": "목표 레플리카", "refId": "B" }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "short", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 0 } },
+        "defaults": { "unit": "short", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 8 } },
         "overrides": [{ "matcher": { "id": "byFrameRefID", "options": "B" },
-          "properties": [{ "id": "custom.lineStyle", "value": { "dash": [5, 5], "fill": "dash" } }] }]
+          "properties": [{ "id": "custom.lineStyle", "value": { "dash": [5, 5], "fill": "dash" } },
+                         { "id": "color", "value": { "fixedColor": "#F2CC0C", "mode": "fixed" } }] }]
       },
-      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull"] } }
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] } }
     },
 
-    { "id": 42, "title": "HPA 현황",
-      "type": "table",
-      "gridPos": { "h": 8, "w": 10, "x": 14, "y": 41 },
+    { "id": 42, "title": "PdM Replicas (KServe)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 41 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
-      "targets": [{ "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=~\"$namespace\"}", "legendFormat": "{{ namespace }}/{{ horizontalpodautoscaler }}", "refId": "A", "instant": true }],
+      "targets": [
+        { "expr": "kube_deployment_status_replicas_available{namespace=\"inference\", deployment=~\".*pdm.*\"}", "legendFormat": "현재 레플리카", "refId": "A" },
+        { "expr": "kube_deployment_spec_replicas{namespace=\"inference\", deployment=~\".*pdm.*\"}", "legendFormat": "목표 레플리카", "refId": "B" }
+      ],
       "fieldConfig": {
-        "defaults": { "unit": "short" },
-        "overrides": [{ "matcher": { "id": "byName", "options": "Value" }, "properties": [{ "id": "displayName", "value": "현재 레플리카" }] }]
-      }
+        "defaults": { "unit": "short", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 8 } },
+        "overrides": [{ "matcher": { "id": "byFrameRefID", "options": "B" },
+          "properties": [{ "id": "custom.lineStyle", "value": { "dash": [5, 5], "fill": "dash" } },
+                         { "id": "color", "value": { "fixedColor": "#F2CC0C", "mode": "fixed" } }] }]
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] } }
     }
 
   ],
