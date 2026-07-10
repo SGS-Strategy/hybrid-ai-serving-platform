@@ -23,7 +23,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [{ "expr": "sum(rate(kube_pod_container_status_restarts_total{namespace=~\"$namespace\"}[5m])) * 300", "legendFormat": "재시작 횟수", "refId": "A" }],
       "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] } } },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
     },
 
     { "id": 13, "title": "Prometheus 수집 대상 상태",
@@ -40,7 +40,7 @@
           "properties": [{ "id": "thresholds", "value": { "mode": "absolute",
             "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }] }]
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "orientation": "horizontal" }
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "orientation": "horizontal" }
     },
 
     { "id": 14, "title": "노드 CPU 사용률",
@@ -105,11 +105,11 @@
     { "type": "row", "title": "Predictor / ML Pod Performance", "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 }, "id": 20 },
 
-    { "id": 21, "title": "Predictor RPS",
+    { "id": 21, "title": "Predictor TPS (처리 완료)",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 21 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
-      "targets": [{ "expr": "sum(rate(http_requests_total{job=~\"inference/pdm-predictor|.*pdm-predictor.*|.*predictor.*\"}[1m]))", "legendFormat": "Predictor RPS", "refId": "A" }],
+      "targets": [{ "expr": "sum(rate(http_request_duration_highr_seconds_count{namespace=\"inference\", pod=~\".*pdm.*\"}[1m]))", "legendFormat": "Predictor TPS", "refId": "A" }],
       "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 0 } } }
     },
 
@@ -117,8 +117,8 @@
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 21 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
-      "targets": [{ "expr": "(sum(rate(http_requests_total{job=~\"inference/pdm-predictor|.*pdm-predictor.*|.*predictor.*\",status=~\"5..\"}[5m])) or vector(0)) / clamp_min(sum(rate(http_requests_total{job=~\"inference/pdm-predictor|.*pdm-predictor.*|.*predictor.*\"}[5m])) or vector(1), 1)", "legendFormat": "Predictor 5xx", "refId": "A" }],
-      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 5 }] } } }
+      "targets": [{ "expr": "(sum(rate(http_requests_total{namespace=\"inference\", pod=~\".*pdm-predictor.*\", status=~\"5..\"}[5m])) or vector(0)) / (sum(rate(http_requests_total{namespace=\"inference\", pod=~\".*pdm-predictor.*\"}[5m])) > 0)", "legendFormat": "Predictor 5xx", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.05 }] } } }
     },
 
     { "id": 23, "title": "Predictor P99 Latency",
