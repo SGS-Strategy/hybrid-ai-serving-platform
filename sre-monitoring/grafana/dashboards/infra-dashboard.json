@@ -14,7 +14,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [{ "expr": "sum(kube_pod_status_phase{phase=\"Running\",namespace=~\"$namespace\"})", "legendFormat": "Running", "refId": "A" }],
       "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } } },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center", "textMode": "value" }
     },
 
     { "id": 12, "title": "Pod Restarts (5m)",
@@ -23,7 +23,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [{ "expr": "sum(rate(kube_pod_container_status_restarts_total{namespace=~\"$namespace\"}[5m])) * 300", "legendFormat": "Restarts", "refId": "A" }],
       "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] } } },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center", "textMode": "value" }
     },
 
     { "id": 13, "title": "Prometheus Targets Up",
@@ -36,7 +36,7 @@
       "fieldConfig": {
         "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } }
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center", "textMode": "value" }
     },
 
     { "id": 14, "title": "Node CPU Utilization",
