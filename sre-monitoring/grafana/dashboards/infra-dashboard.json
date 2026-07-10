@@ -14,7 +14,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [{ "expr": "sum(kube_pod_status_phase{phase=\"Running\",namespace=~\"$namespace\"})", "legendFormat": "Running", "refId": "A" }],
       "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } } },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
     },
 
     { "id": 12, "title": "Pod Restarts (5m)",
@@ -23,7 +23,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [{ "expr": "sum(rate(kube_pod_container_status_restarts_total{namespace=~\"$namespace\"}[5m])) * 300", "legendFormat": "Restarts", "refId": "A" }],
       "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] } } },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
     },
 
     { "id": 13, "title": "Prometheus Targets Up",
@@ -36,12 +36,12 @@
       "fieldConfig": {
         "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } }
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
     },
 
     { "id": 14, "title": "Node CPU Utilization",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 5 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [{ "expr": "sre:node_cpu_utilization:rate5m * 100", "legendFormat": "{{ instance }}", "refId": "A" }],
       "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100,
@@ -52,7 +52,7 @@
 
     { "id": 15, "title": "Node Memory Utilization",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 5 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [{ "expr": "sre:node_memory_utilization:ratio * 100", "legendFormat": "{{ instance }}", "refId": "A" }],
       "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100,
@@ -63,7 +63,7 @@
 
     { "id": 17, "title": "Core System Deployment Availability",
       "type": "table",
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 13 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 5 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [{ "expr": "sre:deployment_availability:ratio{deployment=~\"aws-load-balancer-controller|cert-manager|kube-prometheus-stack-grafana|kube-prometheus-stack-operator|kube-state-metrics|prometheus-node-exporter|keda-operator|keda-operator-metrics-apiserver|keda-admission-webhooks|cluster-autoscaler\"} * 100", "refId": "A", "instant": true, "format": "table" }],
       "transformations": [{ "id": "organize", "options": {
@@ -82,11 +82,11 @@
     },
 
     { "type": "row", "title": "Node Autoscaling", "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 }, "id": 60 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 }, "id": 60 },
 
     { "id": 61, "title": "Ready Nodes",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 21 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 14 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [
         { "expr": "count by (label_workload) (\n  kube_node_labels{label_workload=~\"inference|general\"}\n  * on(node) group_left()\n  kube_node_status_condition{condition=\"Ready\", status=\"true\"}\n)", "legendFormat": "{{ label_workload }}", "refId": "A" },
@@ -98,7 +98,7 @@
 
     { "id": 62, "title": "Pending Pods",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 21 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 14 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [
         { "expr": "sum(kube_pod_status_phase{phase=\"Pending\", namespace!~\"kube-system|monitoring\"}) or vector(0)", "legendFormat": "Pending Pods", "refId": "A" },
@@ -114,7 +114,7 @@
 
     { "id": 63, "title": "CA Scale Events",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 21 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 14 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [
         { "expr": "increase(cluster_autoscaler_scaled_up_nodes_total[30m]) or vector(0)", "legendFormat": "스케일업 (노드 추가)", "refId": "A" },
@@ -131,11 +131,11 @@
     },
 
     { "type": "row", "title": "Pod Autoscaling", "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 }, "id": 40 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 }, "id": 40 },
 
     { "id": 41, "title": "Worker Replicas (KEDA)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 30 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [
         { "expr": "kube_deployment_status_replicas_available{namespace=\"inference\", deployment=\"inference-worker\"}", "legendFormat": "현재 레플리카", "refId": "A" },
@@ -152,7 +152,7 @@
 
     { "id": 42, "title": "PdM Replicas (KServe)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 30 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [
         { "expr": "kube_deployment_status_replicas_available{namespace=\"inference\", deployment=~\".*pdm.*\"}", "legendFormat": "현재 레플리카", "refId": "A" },
