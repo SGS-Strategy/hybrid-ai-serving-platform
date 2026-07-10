@@ -65,23 +65,6 @@
       "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] } }
     },
 
-    { "id": 16, "title": "Pod 재시작 현황 (네임스페이스별)",
-      "type": "table",
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
-      "targets": [{ "expr": "sum by (namespace, pod, container) (increase(kube_pod_container_status_restarts_total[1h])) > 0", "legendFormat": "{{ namespace }} / {{ pod }}", "refId": "A", "instant": true }],
-      "fieldConfig": {
-        "defaults": { "unit": "short" },
-        "overrides": [{ "matcher": { "id": "byName", "options": "Value" },
-          "properties": [
-            { "id": "displayName", "value": "재시작 횟수 (1h)" },
-            { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] } },
-            { "id": "custom.displayMode", "value": "color-background" }
-          ]}]
-      },
-      "options": { "sortBy": [{ "displayName": "재시작 횟수 (1h)", "desc": true }] }
-    },
-
     { "id": 17, "title": "Deployment 가용성",
       "type": "table",
       "gridPos": { "h": 6, "w": 12, "x": 12, "y": 13 },
