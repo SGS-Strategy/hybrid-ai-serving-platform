@@ -155,7 +155,7 @@
       "fieldConfig": { "defaults": { "unit": "short", "color": { "fixedColor": "#5794F2", "mode": "fixed" }, "custom": { "lineWidth": 2, "fillOpacity": 15 },
         "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 100 }, { "color": "red", "value": 500 }] } } },
       "options": { "tooltip": { "mode": "multi" } },
-      "targets": [{ "expr": "kafka_consumergroup_lag{topic=\"inference-request\"}", "legendFormat": "{{ consumergroup }}", "refId": "A" }]
+      "targets": [{ "expr": "sum by (consumergroup) (kafka_consumergroup_lag{topic=\"inference-request\"})", "legendFormat": "{{ consumergroup }}", "refId": "A" }]
     },
 
     { "id": 41, "title": "Retry Rate",
@@ -164,7 +164,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "fieldConfig": { "defaults": { "unit": "reqps", "color": { "fixedColor": "#FF9900", "mode": "fixed" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
       "options": { "tooltip": { "mode": "single" } },
-      "targets": [{ "expr": "rate(inference_retry_published_total[5m]) or vector(0)", "legendFormat": "Retry Rate", "refId": "A" }]
+      "targets": [{ "expr": "sum(rate(inference_retry_published_total[5m])) or vector(0)", "legendFormat": "Retry Rate", "refId": "A" }]
     },
 
     { "id": 42, "title": "DLQ Count",
