@@ -9,6 +9,7 @@ This directory contains Argo CD `Application` manifests for cluster add-ons used
 - `keda`
 - `inference-api`
 - `kube-prometheus-stack`
+- `prometheus-rules`
 - `loki`
 - `promtail`
 - `chaos-mesh`
