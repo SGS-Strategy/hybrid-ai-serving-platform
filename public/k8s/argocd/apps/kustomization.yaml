@@ -15,6 +15,7 @@ resources:
   - cluster-autoscaler-app.yaml
   - keda-app.yaml
   - kube-prometheus-stack-app.yaml
+  - prometheus-rules-app.yaml
   - loki-app.yaml
   - promtail-app.yaml
   - chaos-mesh-app.yaml
