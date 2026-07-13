@@ -44,7 +44,7 @@
 
     { "id": 14, "title": "Node CPU Utilization",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 6 },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 6 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [{ "expr": "sre:node_cpu_utilization:rate5m * 100", "legendFormat": "{{ instance }}", "refId": "A" }],
       "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100,
@@ -55,7 +55,7 @@
 
     { "id": 15, "title": "Node Memory Utilization",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 6 },
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 6 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "targets": [{ "expr": "sre:node_memory_utilization:ratio * 100", "legendFormat": "{{ instance }}", "refId": "A" }],
       "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100,
@@ -64,24 +64,22 @@
       "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] } }
     },
 
-    { "id": 17, "title": "Core System Deployment Availability",
-      "type": "table",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 6 },
+    { "id": 71, "title": "Pod CPU Utilization",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 6 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
-      "targets": [{ "expr": "sre:deployment_availability:ratio{deployment=~\"aws-load-balancer-controller|cert-manager|kube-prometheus-stack-grafana|kube-prometheus-stack-operator|kube-state-metrics|prometheus-node-exporter|keda-operator|keda-operator-metrics-apiserver|keda-admission-webhooks|cluster-autoscaler\"} * 100", "refId": "A", "instant": true, "format": "table" }],
-      "transformations": [{ "id": "organize", "options": {
-        "excludeByName": { "Time": false, "container": true, "endpoint": true, "instance": true, "job": true, "pod": true, "service": true },
-        "renameByName": { "namespace": "Namespace", "deployment": "Deployment", "Value": "Availability %" }
-      }}],
-      "fieldConfig": {
-        "defaults": { "unit": "percent", "min": 0, "max": 100 },
-        "overrides": [{ "matcher": { "id": "byName", "options": "Availability %" },
-          "properties": [
-            { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 50 }, { "color": "green", "value": 100 }] } },
-            { "id": "custom.displayMode", "value": "color-background" }
-          ]}]
-      },
-      "options": { "filterable": true }
+      "targets": [{ "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"inference\", container!=\"\", container!=\"POD\"}[5m])) by (pod)", "legendFormat": "{{ pod }}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 8 } } },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] } }
+    },
+
+    { "id": 72, "title": "Pod Memory Utilization",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
+      "targets": [{ "expr": "sum(container_memory_working_set_bytes{namespace=\"inference\", container!=\"\", container!=\"POD\"}) by (pod)", "legendFormat": "{{ pod }}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 8 } } },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] } }
     },
 
     { "type": "row", "title": "Node Autoscaling", "collapsed": false,
@@ -168,6 +166,8 @@
                          { "id": "color", "value": { "fixedColor": "#F2CC0C", "mode": "fixed" } }] }]
       },
       "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] } }
+    },
+
     }
 
   ],
