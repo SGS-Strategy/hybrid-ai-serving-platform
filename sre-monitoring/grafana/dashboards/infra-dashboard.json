@@ -166,8 +166,6 @@
                          { "id": "color", "value": { "fixedColor": "#F2CC0C", "mode": "fixed" } }] }]
       },
       "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] } }
-    },
-
     }
 
   ],
