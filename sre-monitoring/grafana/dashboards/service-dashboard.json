@@ -67,7 +67,7 @@
       "type": "stat",
       "gridPos": { "h": 4, "w": 3, "x": 21, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
-      "targets": [{ "expr": "max(slo:error_budget_remaining:ratio) * 100", "legendFormat": "잔여 에러 버짓", "refId": "A" }],
+      "targets": [{ "expr": "clamp_min(1 - (((sum(increase(http_request_duration_highr_seconds_count{namespace=\"inference\", pod=~\".*inference-api.*\"}[1h])) - sum(increase(inference_pipeline_completed_total[1h]))) / clamp_min(sum(increase(http_request_duration_highr_seconds_count{namespace=\"inference\", pod=~\".*inference-api.*\"}[1h])), 1)) / 0.001), 0) * 100", "legendFormat": "잔여 에러 버짓", "refId": "A" }],
       "fieldConfig": { "defaults": { "unit": "percent", "decimals": 0,
         "color": { "mode": "thresholds" },
         "thresholds": { "mode": "absolute", "steps": [{ "color": "#F2495C", "value": null }, { "color": "#F2CC0C", "value": 20 }, { "color": "#73BF69", "value": 50 }] } } },
@@ -180,32 +180,24 @@
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 }, "id": 5,
       "panels": [
         {
-          "id": 50, "title": "Error Budget 번 레이트 (1h / 6h / 24h)",
+          "id": 50, "title": "Error Budget Burn Rate (1h)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 24, "x": 0, "y": 41 },
           "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
           "fieldConfig": {
             "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 8 } },
             "overrides": [
-              { "matcher": { "id": "byName", "options": "Critical 임계값 (1h 소진)" },
+              { "matcher": { "id": "byName", "options": "Critical (14.4x)" },
                 "properties": [
                   { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
                   { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
-                ]},
-              { "matcher": { "id": "byName", "options": "Warning 임계값 (6h 소진)" },
-                "properties": [
-                  { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
-                  { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }
                 ]}
             ]
           },
           "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "max"] } },
           "targets": [
-            { "expr": "slo:error_budget_burn_rate:1h",  "legendFormat": "1h 번 레이트",  "refId": "A" },
-            { "expr": "slo:error_budget_burn_rate:6h",  "legendFormat": "6h 번 레이트",  "refId": "B" },
-            { "expr": "slo:error_budget_burn_rate:24h", "legendFormat": "24h 번 레이트", "refId": "C" },
-            { "expr": "vector(14.4)", "legendFormat": "Critical 임계값 (1h 소진)", "refId": "D" },
-            { "expr": "vector(6)",    "legendFormat": "Warning 임계값 (6h 소진)",  "refId": "E" }
+            { "expr": "(1 - (sum(increase(inference_pipeline_completed_total[1h])) / clamp_min(sum(increase(http_request_duration_highr_seconds_count{namespace=\"inference\", pod=~\".*inference-api.*\"}[1h])), 1))) / 0.001", "legendFormat": "Burn Rate (1h)", "refId": "A" },
+            { "expr": "vector(14.4)", "legendFormat": "Critical (14.4x)", "refId": "B" }
           ]
         }
       ]
