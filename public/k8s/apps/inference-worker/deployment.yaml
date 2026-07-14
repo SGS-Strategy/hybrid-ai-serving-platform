@@ -71,7 +71,7 @@ spec:
             - name: WORKER_CONSUMER_GROUP
               value: inference-worker-group
             - name: WORKER_CONCURRENCY
-              value: "4"
+              value: "2"
             - name: METRICS_PORT
               value: "9090"
             - name: DYNAMODB_TABLE_NAME
@@ -92,8 +92,8 @@ spec:
               containerPort: 9090
           resources:
             requests:
-              cpu: "500m"
+              cpu: "1"
               memory: "512Mi"
             limits:
-              cpu: "2"
+              cpu: "3"
               memory: "1Gi"
