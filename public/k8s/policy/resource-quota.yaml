@@ -6,10 +6,10 @@ metadata:
   namespace: inference
 spec:
   hard:
-    requests.cpu: "6"
+    requests.cpu: "10"
     requests.memory: "6Gi"
-    limits.cpu: "20"
-    limits.memory: "12Gi"
+    limits.cpu: "30"
+    limits.memory: "14Gi"
     pods: "20"
 ---
 apiVersion: v1
@@ -27,7 +27,7 @@ spec:
         cpu: "100m"
         memory: "256Mi"
       max:
-        cpu: "2"
+        cpu: "4"
         memory: "2Gi"
 ---
 # app 네임스페이스
