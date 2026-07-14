@@ -8,7 +8,7 @@ spec:
   hard:
     requests.cpu: "4"
     requests.memory: "4Gi"
-    limits.cpu: "10"
+    limits.cpu: "20"
     limits.memory: "8Gi"
     pods: "20"
 ---
