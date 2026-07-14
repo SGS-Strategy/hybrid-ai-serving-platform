@@ -14,6 +14,7 @@ API_URL = os.getenv("API_URL", "http://your-api-server/infer")
 DATA_PATH = Path(os.getenv("DATA_PATH", "/data/normal.csv"))
 FACTORY_ID = os.getenv("FACTORY_ID", "FAB-01")
 EQUIPMENT_COUNT = int(os.getenv("EQUIPMENT_COUNT", "100"))
+EQUIPMENT_OFFSET = int(os.getenv("EQUIPMENT_OFFSET", "0"))
 WINDOW_SIZE = int(os.getenv("WINDOW_SIZE", "1000"))
 INTERVAL_SEC = float(os.getenv("INTERVAL_SEC", "1.0"))
 REQUEST_TIMEOUT_SEC = float(os.getenv("REQUEST_TIMEOUT_SEC", "10"))
@@ -39,7 +40,7 @@ def create_equipment_offsets(df):
     if max_start <= 0:
         raise ValueError("normal.csv is smaller than WINDOW_SIZE.")
     return {
-        f"EQ-{i:03d}": random.randint(0, max_start)
+        f"EQ-{EQUIPMENT_OFFSET + i:03d}": random.randint(0, max_start)
         for i in range(1, EQUIPMENT_COUNT + 1)
     }
 
@@ -97,10 +98,11 @@ async def main():
 
     logger.info("loaded data path=%s rows=%s", DATA_PATH, len(df))
     logger.info(
-        "simulator config api_url=%s factory_id=%s equipment_count=%s window_size=%s interval_sec=%s cadence_sec=%s max_concurrency=%s target_rps=%s",
+        "simulator config api_url=%s factory_id=%s equipment_count=%s equipment_offset=%s window_size=%s interval_sec=%s cadence_sec=%s max_concurrency=%s target_rps=%s",
         API_URL,
         FACTORY_ID,
         EQUIPMENT_COUNT,
+        EQUIPMENT_OFFSET,
         WINDOW_SIZE,
         INTERVAL_SEC,
         round(cadence_sec, 4),
