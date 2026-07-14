@@ -30,7 +30,7 @@
       "type": "stat",
       "gridPos": { "h": 4, "w": 3, "x": 8, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
-      "targets": [{ "expr": "sum(rate(inference_pipeline_completed_total[1m])) or vector(0)", "legendFormat": "E2E TPS", "refId": "A" }],
+      "targets": [{ "expr": "sum(rate(inference_pipeline_completed_total[5m])) or vector(0)", "legendFormat": "E2E TPS", "refId": "A" }],
       "fieldConfig": { "defaults": { "unit": "reqps" } },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none" }
     },
@@ -83,7 +83,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "fieldConfig": { "defaults": { "unit": "reqps", "color": { "fixedColor": "#5794F2", "mode": "fixed" }, "custom": { "lineWidth": 2, "fillOpacity": 12 } } },
       "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
-      "targets": [{ "expr": "sum(rate(http_request_duration_highr_seconds_count{namespace=\"inference\", pod=~\".*inference-api.*\"}[1m]))", "legendFormat": "Ingress RPS (전체 유입)", "refId": "A" }]
+      "targets": [{ "expr": "sum(rate(http_request_duration_highr_seconds_count{namespace=\"inference\", pod=~\".*inference-api.*\"}[5m]))", "legendFormat": "Ingress RPS (전체 유입)", "refId": "A" }]
     },
 
     { "id": 21, "title": "Inference TPS (처리 완료)",
@@ -92,7 +92,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "fieldConfig": { "defaults": { "unit": "reqps", "color": { "fixedColor": "#73BF69", "mode": "fixed" }, "custom": { "lineWidth": 2, "fillOpacity": 12 } } },
       "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
-      "targets": [{ "expr": "sum(rate(http_request_duration_highr_seconds_count{namespace=\"inference\", pod=~\".*pdm.*\"}[1m]))", "legendFormat": "Inference TPS (처리 완료)", "refId": "A" }]
+      "targets": [{ "expr": "sum(rate(http_request_duration_highr_seconds_count{namespace=\"inference\", pod=~\".*pdm.*\"}[5m]))", "legendFormat": "Inference TPS (처리 완료)", "refId": "A" }]
     },
 
     { "id": 22, "title": "E2E TPS (DB 적재 완료)",
@@ -101,7 +101,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PUBLIC}" },
       "fieldConfig": { "defaults": { "unit": "reqps", "color": { "fixedColor": "#F9934E", "mode": "fixed" }, "custom": { "lineWidth": 2, "fillOpacity": 8 } } },
       "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
-      "targets": [{ "expr": "sum(rate(inference_pipeline_completed_total[1m])) or vector(0)", "legendFormat": "E2E TPS (DB 적재)", "refId": "A" }]
+      "targets": [{ "expr": "sum(rate(inference_pipeline_completed_total[5m])) or vector(0)", "legendFormat": "E2E TPS (DB 적재)", "refId": "A" }]
     },
 
     { "type": "row", "title": "LATENCY", "collapsed": false,
