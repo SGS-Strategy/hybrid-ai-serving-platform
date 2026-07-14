@@ -5,9 +5,7 @@ resources:
   - deployment.yaml
   - pdb.yaml
   - podmonitor.yaml
-  - scaledobject.yaml
   - serviceaccount.yaml
-  - trigger-auth.yaml
 
 images:
   - name: 808379768010.dkr.ecr.ap-northeast-2.amazonaws.com/inference-worker
