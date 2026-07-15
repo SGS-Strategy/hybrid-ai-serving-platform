@@ -5,6 +5,9 @@ resource "kubernetes_manifest" "inference_worker_scaledobject" {
     metadata = {
       name      = "inference-worker"
       namespace = kubernetes_namespace.inference.metadata[0].name
+      labels = {
+        "argocd.argoproj.io/instance" = "inference-worker"
+      }
     }
     spec = {
       scaleTargetRef = {
@@ -18,12 +21,12 @@ resource "kubernetes_manifest" "inference_worker_scaledobject" {
         {
           type = "kafka"
           metadata = {
-            bootstrapServers = data.terraform_remote_state.platform.outputs.msk_bootstrap_brokers
-            consumerGroup    = "inference-worker-group"
-            topic            = "inference-request"
-            lagThreshold     = "20"
+            bootstrapServers  = data.terraform_remote_state.platform.outputs.msk_bootstrap_brokers
+            consumerGroup     = "inference-worker-group"
+            topic             = "inference-request"
+            lagThreshold      = "20"
             offsetResetPolicy = "latest"
-            tls              = "enable"
+            tls               = "enable"
           }
         }
       ]
