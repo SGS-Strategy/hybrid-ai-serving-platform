@@ -6,7 +6,7 @@ metadata:
 spec:
   scaleTargetRef:
     name: inference-worker
-  minReplicaCount: 2
+  minReplicaCount: 3
   maxReplicaCount: 6  # Match the current inference-request topic partition count.
   pollingInterval: 15
   cooldownPeriod: 120
