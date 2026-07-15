@@ -675,6 +675,7 @@ jobs:
               "kubectl delete ingress --all -n inference --ignore-not-found=true --wait=false || true",
               "kubectl delete ingress --all -n app --ignore-not-found=true --wait=false || true",
               "kubectl get inferenceservice -n inference -o name 2>/dev/null | xargs -I{} kubectl patch {} -n inference -p '{\"metadata\":{\"finalizers\":[]}}' --type=merge || true",
+              "kubectl delete scaledobject inference-worker -n inference --ignore-not-found=true --wait=false || true",
               "kubectl delete inferenceservice --all -n inference --ignore-not-found=true --wait=false || true",
               "kubectl delete deploy --all -n app --ignore-not-found=true --wait=false || true",
               "kubectl delete svc --all -n app --ignore-not-found=true --wait=false || true",
@@ -775,7 +776,7 @@ jobs:
               "tar -xzf /tmp/hasp-bootstrap/terraform-incluster.tar.gz -C /tmp/hasp-bootstrap",
               "terraform -chdir=/tmp/hasp-bootstrap/terraform-incluster init",
               # destroy 시 namespace finalizer로 인한 타임아웃 방지: namespace finalizer 제거 후 state에서 제거
-              "if [ '{}' = 'destroy' ]; then kubectl get apiservice v1beta1.external.metrics.k8s.io >/dev/null 2>&1 && kubectl delete apiservice v1beta1.external.metrics.k8s.io || true; for ns in app inference argocd; do kubectl patch namespace $ns -p '{{\"metadata\":{{\"finalizers\":[]}}}}' --type=merge 2>/dev/null || true; kubectl delete namespace $ns --ignore-not-found=true 2>/dev/null || true; done; sleep 10; terraform -chdir=/tmp/hasp-bootstrap/terraform-incluster state rm kubernetes_namespace.argocd kubernetes_namespace.inference 2>/dev/null || true; fi".format(tf_action),
+              "if [ '{}' = 'destroy' ]; then kubectl delete scaledobject inference-worker -n inference --ignore-not-found=true --wait=false || true; kubectl get apiservice v1beta1.external.metrics.k8s.io >/dev/null 2>&1 && kubectl delete apiservice v1beta1.external.metrics.k8s.io || true; for ns in app inference argocd; do kubectl patch namespace $ns -p '{{\"metadata\":{{\"finalizers\":[]}}}}' --type=merge 2>/dev/null || true; kubectl delete namespace $ns --ignore-not-found=true 2>/dev/null || true; done; sleep 10; terraform -chdir=/tmp/hasp-bootstrap/terraform-incluster state rm kubernetes_manifest.inference_worker_scaledobject kubernetes_namespace.argocd kubernetes_namespace.inference 2>/dev/null || true; fi".format(tf_action),
               tf_command,
           ]
 
