@@ -76,7 +76,7 @@ This CR targets:
 
 - Argo CD Application name pattern: `pdm-serving`
 - image: `808379768010.dkr.ecr.ap-northeast-2.amazonaws.com/predictive-model`
-- strategy: `newest-build`
+- strategy: `semver`
 - tag filter: `regexp:^v[0-9]+\.[0-9]+\.[0-9]+$`
 - write-back target: `kustomization`
 - Git branch: `main`
