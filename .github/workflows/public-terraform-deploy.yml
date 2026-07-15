@@ -768,7 +768,7 @@ jobs:
               "read AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN <<< \"$ASSUME_ROLE_OUTPUT\"",
               "export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN",
               f"aws eks update-kubeconfig --region {os.environ['AWS_REGION']} --name {os.environ['EKS_CLUSTER_NAME']} --role-arn {os.environ['BOOTSTRAP_ROLE_ARN']} --kubeconfig /tmp/eks-kubeconfig",
-              "if ! kubectl get crd scaledobjects.keda.sh >/dev/null 2>&1; then kubectl apply -k github.com/kedacore/keda/config/crd?ref=v2.19.0; fi",
+              "if ! kubectl get crd scaledobjects.keda.sh >/dev/null 2>&1; then kubectl apply -f https://raw.githubusercontent.com/kedacore/keda/v2.19.0/config/crd/bases/keda.sh_scaledobjects.yaml; fi",
               "for i in $(seq 1 30); do kubectl get crd scaledobjects.keda.sh >/dev/null 2>&1 && break; echo \"Waiting for KEDA ScaledObject CRD ($i/30)\"; sleep 5; if [ \"$i\" -eq 30 ]; then echo 'KEDA ScaledObject CRD was not registered.'; exit 1; fi; done",
               "rm -rf /tmp/hasp-bootstrap && mkdir -p /tmp/hasp-bootstrap",
               f"echo {os.environ['INCLUSTER_TF_B64']} | base64 -d > /tmp/hasp-bootstrap/terraform-incluster.tar.gz",
