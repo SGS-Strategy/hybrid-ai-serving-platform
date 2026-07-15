@@ -10,10 +10,26 @@ resource "kubernetes_manifest" "inference_worker_scaledobject" {
       scaleTargetRef = {
         name = "inference-worker"
       }
-      minReplicaCount = 2
+      minReplicaCount = 3
       maxReplicaCount = 6
       pollingInterval = 15
-      cooldownPeriod  = 120
+      cooldownPeriod  = 300
+      advanced = {
+        horizontalPodAutoscalerConfig = {
+          behavior = {
+            scaleDown = {
+              stabilizationWindowSeconds = 300
+              policies = [
+                {
+                  type          = "Pods"
+                  value         = 1
+                  periodSeconds = 60
+                }
+              ]
+            }
+          }
+        }
+      }
       triggers = [
         {
           type = "kafka"
