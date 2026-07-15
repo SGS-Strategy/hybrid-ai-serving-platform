@@ -5,9 +5,6 @@ resource "kubernetes_manifest" "inference_worker_scaledobject" {
     metadata = {
       name      = "inference-worker"
       namespace = kubernetes_namespace.inference.metadata[0].name
-      labels = {
-        "argocd.argoproj.io/instance" = "inference-worker"
-      }
     }
     spec = {
       scaleTargetRef = {
