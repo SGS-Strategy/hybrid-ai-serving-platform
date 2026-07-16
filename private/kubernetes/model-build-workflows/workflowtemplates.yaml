@@ -26,6 +26,9 @@ spec:
       - name: image_tag
         value: raw-data%2Fdev%2F_SUCCESS
 
+      - name: dataset_object_key
+        value: raw-data/dev/_SUCCESS
+
       - name: git_repo_url
         value: https://gitlab.intp.me/3stacks/predictor-model.git
 
@@ -89,6 +92,10 @@ spec:
         env:
           - name: MINIO_ENDPOINT
             value: "{{workflow.parameters.minio_endpoint}}"
+          - name: DATASET_OBJECT_KEY
+            value: "{{workflow.parameters.dataset_object_key}}"
+          - name: ARTIFACT_BUCKET
+            value: "{{workflow.parameters.artifact_bucket}}"
           - name: MINIO_ACCESS_KEY
             valueFrom:
               secretKeyRef:
