@@ -84,6 +84,10 @@ class PipelinePublishError(Exception):
         self.error_type = error_type
 
 
+class DuplicateRequestError(Exception):
+    pass
+
+
 def _bootstrap_servers() -> str:
     value = os.getenv("BOOTSTRAP_SERVERS", "").strip()
     if not value or value in {"replace-me:9092", "replace-me:9094"}:
@@ -273,17 +277,24 @@ def _save_result(
     requested_at: int,
 ) -> int:
     completed_at = _now_epoch_ms()
-    results_table.put_item(
-        Item={
-            "request_id": request_id,
-            "factory_id": factory_id,
-            "equipment_id": equipment_id,
-            "prediction": prediction,
-            "requested_at": requested_at,
-            "completed_at": completed_at,
-            "ttl": _now_epoch() + _results_ttl_seconds(),
-        }
-    )
+    try:
+        results_table.put_item(
+            Item={
+                "request_id": request_id,
+                "factory_id": factory_id,
+                "equipment_id": equipment_id,
+                "prediction": prediction,
+                "requested_at": requested_at,
+                "completed_at": completed_at,
+                "ttl": _now_epoch() + _results_ttl_seconds(),
+            },
+            ConditionExpression="attribute_not_exists(request_id)",
+        )
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code == "ConditionalCheckFailedException":
+            raise DuplicateRequestError(f"duplicate request_id={request_id}") from exc
+        raise
     return completed_at
 
 
@@ -455,6 +466,13 @@ def _run_worker_loop(worker_index: int) -> None:
                             request_id,
                             payload.get("equipment_id"),
                             prediction,
+                        )
+                    except DuplicateRequestError:
+                        consumer.commit()
+                        logger.info(
+                            "duplicate request skipped request_id=%s equipment_id=%s",
+                            request_id,
+                            payload.get("equipment_id"),
                         )
                     except InvalidInferenceRequestError as exc:
                         failure_payload = _build_failure_payload(
