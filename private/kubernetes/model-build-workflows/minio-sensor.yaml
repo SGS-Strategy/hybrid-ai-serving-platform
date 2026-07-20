@@ -55,9 +55,16 @@ spec:
                   parameters:
                     - name: image_tag
                       value: raw-data%2Fdev%2F_SUCCESS
+                    - name: dataset_object_key
+                      value: raw-data/dev/_SUCCESS
           parameters:
             - src:
                 dependencyName: minio-dep
                 dataKey: notification.0.s3.object.key
               dest: spec.arguments.parameters.0.value
+              operation: overwrite
+            - src:
+                dependencyName: minio-dep
+                dataKey: notification.0.s3.object.key
+              dest: spec.arguments.parameters.1.value
               operation: overwrite

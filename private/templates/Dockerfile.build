@@ -1,0 +1,41 @@
+#demo_test
+ARG BASE_IMAGE=10.42.0.127/infra/pytorch-pytorch:2.7.0-cuda12.8-cudnn9-runtime
+FROM ${BASE_IMAGE}
+
+ARG AIRGAP_BUILD=false
+ARG WHEELHOUSE_DIR=.airgap/pip/wheelhouse
+
+COPY requirements.build.txt /tmp/requirements.build.txt
+COPY ${WHEELHOUSE_DIR}/ /tmp/wheelhouse/
+
+RUN if [ "$AIRGAP_BUILD" = "true" ]; then \
+      echo "airgap build: skip apt network step"; \
+    else \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get -y dist-upgrade && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates curl && \
+      (DEBIAN_FRONTEND=noninteractive apt-get purge -y --auto-remove \
+      build-essential cpp g++ gcc make dpkg-dev libc6-dev linux-libc-dev || true) && \
+      rm -rf /var/lib/apt/lists/*; \
+    fi
+
+WORKDIR /workspace
+
+RUN if [ "$AIRGAP_BUILD" = "true" ]; then \
+      python -m pip install --no-index --find-links=/tmp/wheelhouse --upgrade \
+      pip setuptools wheel urllib3 && \
+      (python -m pip uninstall -y Pillow pillow Brotli brotli jaraco.context torchvision || true) && \
+      python -m pip install --no-index --find-links=/tmp/wheelhouse \
+      -r /tmp/requirements.build.txt; \
+    else \
+      python -m pip install --no-cache-dir --upgrade \
+      pip setuptools wheel urllib3 && \
+      (python -m pip uninstall -y Pillow pillow Brotli brotli jaraco.context torchvision || true) && \
+      python -m pip install --no-cache-dir \
+      -r /tmp/requirements.build.txt; \
+    fi
+
+COPY model_build.py .
+
+CMD ["python", "model_build.py"]

@@ -1,0 +1,18 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir \
+    numpy==1.26.4 pandas==2.2.2 scipy==1.13.1 scikit-learn==1.5.0 joblib==1.4.2 \
+    fastapi==0.111.0 uvicorn==0.30.1 && \
+    pip install --no-cache-dir \
+    torch==2.7.0 --index-url https://download.pytorch.org/whl/cpu
+
+COPY model-artifacts/model_weights.pt ./model_weights.pt
+COPY model-artifacts/scaler.pkl ./scaler.pkl
+COPY inference.py .
+
+EXPOSE 8080
+
+CMD ["uvicorn", "inference:app", "--host", "0.0.0.0", "--port", "8080"]
