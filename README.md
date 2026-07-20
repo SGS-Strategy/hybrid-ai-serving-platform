@@ -158,6 +158,13 @@ Kafka/KEDA 기반 Event-Driven 구조를 통해 API, Worker, Predictor를 분리
 - 필요한 Kubernetes Namespace (`model-build`, `argo-events`, `inference`, `argocd`, `monitoring` 등)
 - VPN/Bastion 네트워크 연결
 
+### GitHub Actions 실행 순서
+
+1. `Public Terraform Deploy`: AWS Public Cloud 인프라를 먼저 생성
+2. `Inference Image Build`: Public Cloud에서 실행될 추론 서비스 이미지를 빌드
+3. `Setup Argo CD`: EKS에 ArgoCD 및 GitOps 배포 구성을 적용
+4. `Private Cloud Controller`: Private Cloud와 Public Cloud 연계를 위한 Private 측 제어 작업을 수행
+
 ### 모델 빌드/학습 Workflow 실행
 
 현재 저장소 기준 핵심 Workflow 경로:
@@ -214,11 +221,7 @@ ECR_REPOSITORY=predictive-model
 
 현재 저장소에는 GitLab CI의 완성된 루트 파이프라인 대신, **Runner 구성과 handoff 문서, mock 스크립트가 준비된 상태**입니다.
 
-보조적으로 실제 저장소에는 GitHub Actions 기반 Public 배포 자동화가 존재합니다.
-
-- `.github/workflows/inference-image-build.yml`
-- `.github/workflows/public-terraform-deploy.yml`
-- `.github/workflows/setup-argocd.yml`
+실제 저장소에는 위 순서에 해당하는 GitHub Actions 워크플로가 포함되어 있습니다.
 
 ### ECR 이미지 확인
 
@@ -451,15 +454,7 @@ CLOUDFLARE_API_TOKEN=<CLOUDFLARE_API_TOKEN>
 | 안예원 | 팀원 · Model | 모델 빌드 및 패키징 영역 | Model Build, Package |
 | 정승민 | 팀원 · Hybrid | 하이브리드 전달 및 배포 자동화 영역 | GitLab, ArgoCD |
 
-정승민 담당 설명:
 
-- Hybrid Delivery
-- CI/CD Bridge
-- GitLab Runner 기반 파이프라인
-- Private → Public 이미지 전달
-- ECR Push
-- ArgoCD / ArgoCD Image Updater 연계
-- GitOps 기반 배포 자동화
 
 ## 11. 트러블슈팅 및 운영 포인트
 
